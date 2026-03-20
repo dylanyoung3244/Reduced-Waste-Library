@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { InventoryItem, Request, Category, Item } from '../types';
-import { Package, ClipboardList, ShoppingCart, Plus, Check, X, Download, Users } from 'lucide-react';
+import { Package, ClipboardList, ShoppingCart, Plus, Check, X, Download, Users, Edit, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 
 const exportToCSV = (data: any[], filename: string) => {
   if (!data || data.length === 0) return;
@@ -212,16 +212,28 @@ function InventoryView() {
 
 function RequestsView({ currentUser }: { currentUser: any }) {
   const [requests, setRequests] = useState<Request[]>([]);
-  const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [editingRequest, setEditingRequest] = useState<Request | null>(null);
+  const [expandedRequest, setExpandedRequest] = useState<string | null>(null);
+  const [requestFormData, setRequestFormData] = useState({
+    requester_name: '',
+    department: '',
+    event_name: '',
+    check_out_date: '',
+    check_in_date: '',
+    status: 'Awaiting'
+  });
+  const [requestLineItems, setRequestLineItems] = useState<any[]>([]);
 
   const fetchData = () => {
     Promise.all([
       fetch('/api/requests').then(res => res.json()),
       fetch('/api/categories').then(res => res.json())
-    ]).then(([requestsData, inventoryData]) => {
+    ]).then(([requestsData, categoriesData]) => {
       setRequests(Array.isArray(requestsData) ? requestsData : []);
-      setInventory(Array.isArray(inventoryData) ? inventoryData : []);
+      setCategories(Array.isArray(categoriesData) ? categoriesData : []);
       setLoading(false);
     }).catch(err => {
       console.error(err);
@@ -233,13 +245,103 @@ function RequestsView({ currentUser }: { currentUser: any }) {
     fetchData();
   }, []);
 
-  const updateStatus = async (id: number, status: string) => {
+  const handleEditRequest = (req: Request) => {
+    setEditingRequest(req);
+    setRequestFormData({
+      requester_name: req.requester_name,
+      department: req.department,
+      event_name: req.event_name,
+      check_out_date: req.check_out_date,
+      check_in_date: req.check_in_date,
+      status: req.status
+    });
+    setRequestLineItems(req.line_items || []);
+    setIsFormOpen(true);
+  };
+
+  const handleDeleteRequest = async (id: string) => {
+    if (confirm('Are you sure you want to delete this request? This action cannot be undone.')) {
+      try {
+        const response = await fetch(`/api/requests/${id}`, { method: 'DELETE' });
+        if (!response.ok) throw new Error('Failed to delete request');
+        fetchData();
+      } catch (error) {
+        console.error(error);
+        alert('Error deleting request');
+      }
+    }
+  };
+
+  const addRequestLineItem = () => {
+    if (categories.length > 0) {
+      setRequestLineItems([...requestLineItems, { 
+        category_id: categories[0].id, 
+        category_name: categories[0].name, 
+        quantity: 1 
+      }]);
+    }
+  };
+
+  const updateRequestLineItem = (index: number, field: string, value: any) => {
+    const newItems = [...requestLineItems];
+    if (field === 'category_id') {
+      const cat = categories.find(c => String(c.id) === String(value));
+      newItems[index] = { ...newItems[index], category_id: value, category_name: cat?.name || 'Unknown' };
+    } else {
+      newItems[index] = { ...newItems[index], [field]: value };
+    }
+    setRequestLineItems(newItems);
+  };
+
+  const removeRequestLineItem = (index: number) => {
+    setRequestLineItems(requestLineItems.filter((_, i) => i !== index));
+  };
+
+  const handleSubmitRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const url = editingRequest ? `/api/requests/${editingRequest.id}` : '/api/requests';
+    const method = editingRequest ? 'PUT' : 'POST';
+
+    const payload = {
+      ...requestFormData,
+      line_items: requestLineItems,
+      handled_by: currentUser.full_name
+    };
+
+    try {
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) throw new Error('Failed to save request');
+
+      setIsFormOpen(false);
+      setEditingRequest(null);
+      setRequestFormData({
+        requester_name: '',
+        department: '',
+        event_name: '',
+        check_out_date: '',
+        check_in_date: '',
+        status: 'Awaiting'
+      });
+      setRequestLineItems([]);
+      fetchData();
+    } catch (error) {
+      console.error(error);
+      alert('Error saving request');
+    }
+  };
+
+  const updateStatus = async (id: string, status: string) => {
     await fetch(`/api/requests/${id}/status`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status, handled_by: currentUser.full_name })
     });
-    fetchData(); // Re-fetch both requests and inventory instantly
+    fetchData();
   };
 
   if (loading) return <div className="animate-pulse space-y-4"><div className="h-10 bg-slate-100 rounded-lg w-full"></div></div>;
@@ -249,52 +351,114 @@ function RequestsView({ currentUser }: { currentUser: any }) {
       <div className="lg:col-span-2 space-y-4">
         <div className="flex justify-between items-center">
           <h2 className="text-xl font-semibold text-slate-900">Requests Queue</h2>
-          <button 
-            onClick={() => exportToCSV(requests.map(r => ({...r, line_items: JSON.stringify(r.line_items)})), 'requests.csv')}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
-          >
-            <Download className="w-4 h-4" /> Export to CSV
-          </button>
+          <div className="flex gap-2">
+            <button 
+              onClick={() => {
+                setEditingRequest(null);
+                setRequestFormData({
+                  requester_name: '',
+                  department: '',
+                  event_name: '',
+                  check_out_date: '',
+                  check_in_date: '',
+                  status: 'Awaiting'
+                });
+                setRequestLineItems([]);
+                setIsFormOpen(true);
+              }}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 transition-colors"
+            >
+              <Plus className="w-4 h-4" /> Add Historical Request
+            </button>
+            <button 
+              onClick={() => exportToCSV(requests.map(r => ({...r, line_items: JSON.stringify(r.line_items)})), 'requests.csv')}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
+            >
+              <Download className="w-4 h-4" /> Export to CSV
+            </button>
+          </div>
         </div>
-        <div className="grid grid-cols-1 gap-4">
+        <div className="grid grid-cols-1 gap-2">
           {requests.map(req => (
-            <div key={req.id} className="border border-slate-200 rounded-xl p-4 hover:shadow-sm transition-shadow">
-              <div className="flex justify-between items-start mb-4">
-                <div>
-                  <h3 className="font-semibold text-slate-900">{req.requester_name} - {req.event_name}</h3>
-                  <p className="text-sm text-slate-500">{req.department} • {req.check_out_date} to {req.check_in_date}</p>
-                  {req.handled_by && <p className="text-xs text-slate-400 mt-1">Handled by: {req.handled_by}</p>}
+            <div key={req.id} className="border border-slate-200 rounded-xl overflow-hidden bg-white hover:border-slate-300 transition-colors">
+              <div 
+                className="flex items-center justify-between p-4 cursor-pointer"
+                onClick={() => setExpandedRequest(expandedRequest === req.id ? null : req.id)}
+              >
+                <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="font-semibold text-slate-900 truncate">{req.requester_name}</div>
+                  <div className="text-slate-600 truncate">{req.event_name}</div>
+                  <div className="text-sm text-slate-500">{req.check_out_date} - {req.check_in_date}</div>
                 </div>
-                <select 
-                  value={req.status}
-                  onChange={(e) => updateStatus(req.id as any, e.target.value)}
-                  className={`px-3 py-1.5 rounded-lg text-sm font-medium border-0 outline-none cursor-pointer ${
-                    req.status === 'Awaiting' ? 'bg-amber-100 text-amber-800' :
-                    req.status === 'Approved' ? 'bg-blue-100 text-blue-800' :
-                    req.status === 'Checked-out' ? 'bg-purple-100 text-purple-800' :
-                    req.status === 'Checked-in' ? 'bg-emerald-100 text-emerald-800' :
-                    'bg-red-100 text-red-800'
-                  }`}
-                >
-                  <option value="Awaiting">Awaiting</option>
-                  <option value="Approved">Approved</option>
-                  <option value="Checked-out">Checked-out</option>
-                  <option value="Checked-in">Checked-in</option>
-                  <option value="Denied">Denied</option>
-                </select>
+                <div className="flex items-center gap-4 ml-4" onClick={e => e.stopPropagation()}>
+                  <select 
+                    value={req.status}
+                    onChange={(e) => updateStatus(req.id, e.target.value)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium border-0 outline-none cursor-pointer ${
+                      req.status === 'Awaiting' ? 'bg-amber-100 text-amber-800' :
+                      req.status === 'Approved' ? 'bg-blue-100 text-blue-800' :
+                      req.status === 'Checked-out' ? 'bg-purple-100 text-purple-800' :
+                      req.status === 'Checked-in' ? 'bg-emerald-100 text-emerald-800' :
+                      req.status === 'Test' ? 'bg-slate-200 text-slate-700' :
+                      'bg-red-100 text-red-800'
+                    }`}
+                  >
+                    <option value="Awaiting">Awaiting</option>
+                    <option value="Approved">Approved</option>
+                    <option value="Checked-out">Checked-out</option>
+                    <option value="Checked-in">Checked-in</option>
+                    <option value="Denied">Denied</option>
+                    <option value="Test">Test</option>
+                  </select>
+                  {expandedRequest === req.id ? <ChevronUp className="w-5 h-5 text-slate-400" /> : <ChevronDown className="w-5 h-5 text-slate-400" />}
+                </div>
               </div>
               
-              <div className="bg-slate-50 rounded-lg p-3">
-                <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Requested Items</h4>
-                <ul className="space-y-1">
-                  {(req.line_items || []).map((item: any, index: number) => (
-                    <li key={item.category_id || index} className="text-sm text-slate-700 flex justify-between">
-                      <span>{item.category_name}</span>
-                      <span className="font-medium">{item.quantity}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+              {expandedRequest === req.id && (
+                <div className="px-4 pb-4 pt-2 border-t border-slate-50 bg-slate-50/30">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <div className="text-xs font-semibold text-slate-400 uppercase">Department</div>
+                          <div className="text-sm text-slate-700">{req.department}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs font-semibold text-slate-400 uppercase">Handled By</div>
+                          <div className="text-sm text-slate-700">{req.handled_by || 'Unassigned'}</div>
+                        </div>
+                      </div>
+                      
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => handleEditRequest(req)}
+                          className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+                        >
+                          <Edit className="w-4 h-4" /> Edit Request
+                        </button>
+                        <button 
+                          onClick={() => handleDeleteRequest(req.id)}
+                          className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" /> Delete
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl border border-slate-200 p-3">
+                      <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Requested Items</h4>
+                      <ul className="space-y-1">
+                        {(req.line_items || []).map((item: any, index: number) => (
+                          <li key={item.category_id || index} className="text-sm text-slate-700 flex justify-between">
+                            <span>{item.category_name}</span>
+                            <span className="font-medium">{item.quantity}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
           {requests.length === 0 && (
@@ -307,9 +471,9 @@ function RequestsView({ currentUser }: { currentUser: any }) {
         <h2 className="text-xl font-semibold text-slate-900">Live Inventory</h2>
         <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
           <ul className="space-y-3">
-            {inventory.map(item => {
+            {categories.map(item => {
               const categoryName = (item as any).name || 'Unknown';
-              const currentCount = item.current_count ?? 0;
+              const currentCount = (item as any).current_count ?? 0;
               
               return (
                 <li key={item.id} className="flex justify-between items-center text-sm">
@@ -325,6 +489,95 @@ function RequestsView({ currentUser }: { currentUser: any }) {
           </ul>
         </div>
       </div>
+
+      {isFormOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+              <h3 className="text-xl font-semibold text-slate-900">{editingRequest ? 'Edit Request' : 'Add Historical Request'}</h3>
+              <button onClick={() => setIsFormOpen(false)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                <X className="w-5 h-5 text-slate-500" />
+              </button>
+            </div>
+            <form onSubmit={handleSubmitRequest} className="p-6 space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-700">Requester Name</label>
+                  <input required type="text" value={requestFormData.requester_name} onChange={e => setRequestFormData({...requestFormData, requester_name: e.target.value})} className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-700">Department</label>
+                  <input required type="text" value={requestFormData.department} onChange={e => setRequestFormData({...requestFormData, department: e.target.value})} className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                </div>
+                <div className="space-y-2 col-span-2">
+                  <label className="text-sm font-medium text-slate-700">Event Name</label>
+                  <input required type="text" value={requestFormData.event_name} onChange={e => setRequestFormData({...requestFormData, event_name: e.target.value})} className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-700">Check-out Date</label>
+                  <input required type="date" value={requestFormData.check_out_date} onChange={e => setRequestFormData({...requestFormData, check_out_date: e.target.value})} className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-700">Check-in Date</label>
+                  <input required type="date" value={requestFormData.check_in_date} onChange={e => setRequestFormData({...requestFormData, check_in_date: e.target.value})} className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none" />
+                </div>
+                <div className="space-y-2 col-span-2">
+                  <label className="text-sm font-medium text-slate-700">Status</label>
+                  <select value={requestFormData.status} onChange={e => setRequestFormData({...requestFormData, status: e.target.value})} className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none">
+                    <option value="Awaiting">Awaiting</option>
+                    <option value="Approved">Approved</option>
+                    <option value="Checked-out">Checked-out</option>
+                    <option value="Checked-in">Checked-in</option>
+                    <option value="Denied">Denied</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100 pt-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h4 className="font-semibold text-slate-900">Requested Items</h4>
+                  <button type="button" onClick={addRequestLineItem} className="text-sm text-emerald-600 font-medium hover:text-emerald-700 flex items-center gap-1">
+                    <Plus className="w-4 h-4" /> Add Item
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  {requestLineItems.map((item, i) => (
+                    <div key={i} className="flex gap-3 items-end bg-slate-50 p-3 rounded-xl border border-slate-200">
+                      <div className="flex-1 space-y-1">
+                        <label className="text-xs font-medium text-slate-500">Category</label>
+                        <select 
+                          value={item.category_id} 
+                          onChange={e => updateRequestLineItem(i, 'category_id', e.target.value)}
+                          className="w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm"
+                        >
+                          {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        </select>
+                      </div>
+                      <div className="w-24 space-y-1">
+                        <label className="text-xs font-medium text-slate-500">Quantity</label>
+                        <input 
+                          type="number" min="1" step="1"
+                          value={item.quantity} 
+                          onChange={e => updateRequestLineItem(i, 'quantity', parseInt(e.target.value) || 0)}
+                          className="w-full px-3 py-1.5 rounded-lg border border-slate-300 text-sm"
+                        />
+                      </div>
+                      <button type="button" onClick={() => removeRequestLineItem(i)} className="p-2 text-slate-400 hover:text-red-500 transition-colors">
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button type="button" onClick={() => setIsFormOpen(false)} className="flex-1 px-4 py-3 rounded-xl border border-slate-300 font-medium hover:bg-slate-50 transition-colors">Cancel</button>
+                <button type="submit" className="flex-1 bg-slate-900 text-white px-4 py-3 rounded-xl font-medium hover:bg-slate-800 transition-colors">Save Request</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

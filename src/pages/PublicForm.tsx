@@ -82,18 +82,21 @@ export function PublicForm() {
     }));
   };
 
-  const handleQuantityChange = (categoryId: string, value: string, max: number) => {
+  const handleQuantityChange = (categoryId: string, categoryName: string, value: string, max: number) => {
     let num = parseInt(value, 10);
     if (isNaN(num) || num < 0) {
       setQuantities(prev => ({ ...prev, [categoryId]: 0 }));
       return;
     }
     
-    // Enforce interval of 10
-    num = Math.round(num / 10) * 10;
+    // Enforce interval of 10 unless it's a water jug
+    const isJug = categoryName === 'Reusable Water Jugs';
+    if (!isJug) {
+      num = Math.round(num / 10) * 10;
+    }
 
     if (num > max) {
-      setQuantities(prev => ({ ...prev, [categoryId]: Math.floor(max / 10) * 10 }));
+      setQuantities(prev => ({ ...prev, [categoryId]: isJug ? max : Math.floor(max / 10) * 10 }));
       return;
     }
     setQuantities(prev => ({ ...prev, [categoryId]: num }));
@@ -101,7 +104,7 @@ export function PublicForm() {
 
   const getTotalQuantity = (item: InventoryItem) => {
     const aLaCarte = quantities[item.id] || 0;
-    const categoryName = (item as any).name || 'Unknown';
+    const categoryName = item.name || 'Unknown';
     const setYield = setYields[categoryName] || 0;
     return aLaCarte + (setsRequested * setYield);
   };
@@ -132,7 +135,7 @@ export function PublicForm() {
       return getTotalQuantity(item) > currentCount;
     });
     if (exceededItems.length > 0) {
-      setError(`Requested quantity exceeds available inventory for: ${exceededItems.map(i => (i as any).name || 'Unknown').join(', ')}`);
+      setError(`Requested quantity exceeds available inventory for: ${exceededItems.map(i => i.name || 'Unknown').join(', ')}`);
       return;
     }
 
@@ -302,7 +305,7 @@ export function PublicForm() {
             {inventory.map((item) => {
               const total = getTotalQuantity(item);
               const currentCount = item.current_count ?? item.count ?? 0;
-              const categoryName = (item as any).name || 'Unknown';
+              const categoryName = item.name || 'Unknown';
               const isExceeded = total > currentCount;
 
               return (
@@ -326,13 +329,15 @@ export function PublicForm() {
                     </div>
                     <div className="w-px h-8 bg-slate-200 hidden md:block"></div>
                     <div>
-                      <label className="block text-xs text-slate-500 mb-1">A La Carte (+10)</label>
+                      <label className="block text-xs text-slate-500 mb-1">
+                        A La Carte {item.name === 'Reusable Water Jugs' ? '(+1)' : '(+10)'}
+                      </label>
                       <input
                         type="number"
                         min="0"
-                        step="10"
+                        step={item.name === 'Reusable Water Jugs' ? "1" : "10"}
                         value={quantities[item.id] || ''}
-                        onChange={(e) => handleQuantityChange(item.id, e.target.value, currentCount)}
+                        onChange={(e) => handleQuantityChange(item.id, item.name, e.target.value, currentCount)}
                         disabled={currentCount <= 0}
                         className="w-24 px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all disabled:opacity-50 disabled:bg-slate-100"
                         placeholder="0"

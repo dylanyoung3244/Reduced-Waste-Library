@@ -53,93 +53,33 @@ export async function initDb() {
     categoryMap[doc.data().name] = doc.id;
   });
 
-  // Check if inventory collection is empty
-  const inventorySnapshot = await db.collection('inventory').limit(1).get();
-  if (inventorySnapshot.empty) {
-    const inventoryItems = [
-      {
-        item_number: 'sbl_dpx_dining-dinner-plates_B09KLY73YR_0',
-        vendor: 'Amazon',
-        type: 'Reusable',
-        name: 'Stainless Steel Dining Plate',
-        price: 17.99,
-        pack_size: 1,
-        kit_components: [
-          { category_id: categoryMap['Reusable Plates'], yield_multiplier: 1 }
-        ]
-      },
-      {
-        item_number: 'GUSTO 10',
-        vendor: 'Walmart',
-        type: 'Compostable',
-        name: 'Compostable Paper Plate',
-        price: 29.49,
-        pack_size: 125,
-        kit_components: [
-          { category_id: categoryMap['Compostable Plates'], yield_multiplier: 1 }
-        ]
-      },
-      {
-        item_number: 'cm_sw_r_cp_ud_dp_80RH047CCY6K598Y1EQ7',
-        vendor: 'Amazon',
-        type: 'Reusable',
-        name: 'Aluminum Cup',
-        price: 259.99,
-        pack_size: 1,
-        kit_components: [
-          { category_id: categoryMap['Reusable Cups'], yield_multiplier: 1 }
-        ]
-      },
-      {
-        item_number: 'Wooden-Utensils-Ecovita',
-        vendor: 'Walmart',
-        type: 'Compostable',
-        name: 'Eco Cutlery Combo',
-        price: 59.00,
-        pack_size: 380,
-        kit_components: [
-          { category_id: categoryMap['Compostable Forks'], yield_multiplier: 1 },
-          { category_id: categoryMap['Compostable Knives'], yield_multiplier: 1 },
-          { category_id: categoryMap['Compostable Spoons'], yield_multiplier: 1 }
-        ]
-      },
-      {
-        item_number: 'ECO SOUL',
-        vendor: 'Walmart',
-        type: 'Compostable',
-        name: 'Bamboo Paper Napkin',
-        price: 59.95,
-        pack_size: 4000,
-        kit_components: [
-          { category_id: categoryMap['Compostable Napkins'], yield_multiplier: 1 }
-        ]
-      },
-      {
-        item_number: 'Bmbo-chpstk',
-        vendor: 'Walmart',
-        type: 'Compostable',
-        name: 'Bamboo Chopstick',
-        price: 15.99,
-        pack_size: 200,
-        kit_components: [
-          { category_id: categoryMap['Compostable Chopsticks'], yield_multiplier: 1 }
-        ]
-      },
-      {
-        item_number: '180657001848',
-        vendor: 'Amazon',
-        type: 'Reusable',
-        name: 'Gallon Water Jug',
-        price: 185.95,
-        pack_size: 1,
-        kit_components: [
-          { category_id: categoryMap['Reusable Water Jugs'], yield_multiplier: 1 }
-        ]
-      }
-    ];
+    // Seed initial inventory (Only if empty)
+    const inventorySnapshot = await db.collection('inventory').limit(1).get();
+    if (inventorySnapshot.empty) {
+      // First, fetch category IDs to map the kit components
+      const catSnap = await db.collection('categories').get();
+      const catMap: Record<string, string> = {};
+      catSnap.docs.forEach(doc => {
+        catMap[doc.data().name] = doc.id;
+      });
 
-    for (const item of inventoryItems) {
-      await db.collection('inventory').doc(item.item_number).set(item);
+      const items = [
+        { item_number: 'sbl_dpx_dining-dinner-plates_B09KLY73YR_0', vendor: 'Amazon', type: 'Reusable', name: 'Stainless Steel Dining Plate', price: 17.99, pack_size: 10, current_count: 0, total_procured: 0, total_checked_out: 0, kit_components: [{ category_id: catMap['Reusable Plates'], yield_multiplier: 1 }] },
+        { item_number: 'GUSTO 10', vendor: 'Walmart', type: 'Compostable', name: 'Compostable Paper Plate', price: 29.49, pack_size: 125, current_count: 0, total_procured: 0, total_checked_out: 0, kit_components: [{ category_id: catMap['Compostable Plates'], yield_multiplier: 1 }] },
+        { item_number: 'cm_sw_r_cp_ud_dp_80RH047CCY6K598Y1EQ7', vendor: 'Amazon', type: 'Reusable', name: 'Aluminum Cup', price: 259.99, pack_size: 600, current_count: 0, total_procured: 0, total_checked_out: 0, kit_components: [{ category_id: catMap['Reusable Cups'], yield_multiplier: 1 }] },
+        { item_number: 'Wooden-Utensils-Ecovita', vendor: 'Walmart', type: 'Compostable', name: 'Eco Cuterly Combo', price: 59.00, pack_size: 1, current_count: 0, total_procured: 0, total_checked_out: 0, kit_components: [{ category_id: catMap['Compostable Forks'], yield_multiplier: 140 }, { category_id: catMap['Compostable Knives'], yield_multiplier: 120 }, { category_id: catMap['Compostable Spoons'], yield_multiplier: 120 }] },
+        { item_number: 'ECO SOUL', vendor: 'Walmart', type: 'Compostable', name: 'Bamboo Paper Napkin', price: 59.95, pack_size: 4000, current_count: 0, total_procured: 0, total_checked_out: 0, kit_components: [{ category_id: catMap['Compostable Napkins'], yield_multiplier: 1 }] },
+        { item_number: 'Bmbo-chpstk', vendor: 'Walmart', type: 'Compostable', name: 'Bamboo Chopstick', price: 15.99, pack_size: 200, current_count: 0, total_procured: 0, total_checked_out: 0, kit_components: [{ category_id: catMap['Compostable Chopsticks'], yield_multiplier: 1 }] },
+        { item_number: '180657001848', vendor: 'Amazon', type: 'Reusable', name: 'Gallon Long Term Water Storage Container', price: 185.95, pack_size: 6, current_count: 0, total_procured: 0, total_checked_out: 0, kit_components: [{ category_id: catMap['Reusable Water Jugs'], yield_multiplier: 1 }] }
+      ];
+
+      for (const item of items) {
+        // Ensure kit components have valid category IDs before saving
+        if (item.kit_components.every(comp => comp.category_id)) {
+          await db.collection('inventory').doc(item.item_number).set(item);
+        } else {
+          console.warn(`Skipping item ${item.name} due to missing category mapping.`);
+        }
+      }
     }
-  }
 }

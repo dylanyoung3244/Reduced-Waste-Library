@@ -5,6 +5,7 @@ export type Category = {
 
 export type InventoryItem = {
   id: string;
+  name: string;
   category_id?: string | number;
   category_name?: string;
   category?: string;

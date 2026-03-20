@@ -156,10 +156,87 @@ async function startServer() {
 
   // PUT /api/requests/:id/status
   app.put('/api/requests/:id/status', async (req, res) => {
-    const { status, handled_by } = req.body;
+    const { status: newStatus, handled_by } = req.body;
     const { id } = req.params;
     try {
-      await db.collection('requests').doc(id).update({ status, handled_by });
+      const reqDoc = await db.collection('requests').doc(id).get();
+      if (!reqDoc.exists) return res.status(404).json({ error: 'Request not found' });
+      
+      const requestData = reqDoc.data() as any;
+      const oldStatus = requestData.status;
+
+      if (oldStatus !== newStatus) {
+        for (const item of requestData.line_items || []) {
+          if (!item.category_id) continue;
+          
+          // Fetch the category directly to guarantee we know if it's reusable
+          const catRef = db.collection('categories').doc(String(item.category_id));
+          const catDoc = await catRef.get();
+          if (!catDoc.exists) continue;
+          
+          const catData = catDoc.data() as any;
+          const isReusable = catData.name?.toLowerCase().includes('reusable');
+          const qty = item.quantity;
+
+          // OUTBOUND: Leaving the warehouse
+          if (newStatus === 'Checked-out' && oldStatus !== 'Checked-out') {
+            await catRef.update({
+              current_count: FieldValue.increment(-qty),
+              total_checked_out: FieldValue.increment(qty)
+            });
+          }
+          
+          // INBOUND: Returning to the warehouse
+          if (oldStatus === 'Checked-out' && newStatus !== 'Checked-out') {
+            await catRef.update({
+              total_checked_out: FieldValue.increment(-qty)
+            });
+            
+            if (newStatus === 'Checked-in') {
+              // Only return reusable items
+              if (isReusable) {
+                await catRef.update({ current_count: FieldValue.increment(qty) });
+              }
+            } else if (['Denied', 'Test', 'Awaiting', 'Approved'].includes(newStatus)) {
+              // Reversing a mistake: return EVERYTHING back to the shelf
+              await catRef.update({ current_count: FieldValue.increment(qty) });
+            }
+          }
+        }
+      }
+
+      await db.collection('requests').doc(id).update({ status: newStatus, handled_by });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Status update error:", error);
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  app.delete('/api/requests/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+      await db.collection('requests').doc(id).delete();
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  // PUT /api/requests/:id
+  app.put('/api/requests/:id', async (req, res) => {
+    const { id } = req.params;
+    const { requester_name, department, event_name, check_out_date, check_in_date, status, line_items } = req.body;
+    try {
+      await db.collection('requests').doc(id).update({
+        requester_name,
+        department,
+        event_name,
+        check_out_date,
+        check_in_date,
+        status,
+        line_items: line_items || []
+      });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: String(error) });
@@ -228,20 +305,59 @@ async function startServer() {
     const { order_name, date_ordered, date_delivered, subtotal, shipping, tax, total, procurement_method, line_items, logged_by } = req.body;
     
     try {
-      await db.collection('orders').doc(order_number).update({
-        order_name,
-        date_ordered,
-        date_delivered,
-        subtotal,
-        shipping,
-        tax,
-        total,
-        procurement_method,
-        logged_by,
-        line_items: line_items || []
+      const orderRef = db.collection('orders').doc(order_number);
+      const orderDoc = await orderRef.get();
+      
+      if (!orderDoc.exists) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+
+      const oldOrderData = orderDoc.data() as any;
+
+      // STEP 1: Reverse the old order's math
+      if (oldOrderData.line_items && oldOrderData.line_items.length > 0) {
+        for (const line_item of oldOrderData.line_items) {
+          const invSnapshot = await db.collection('inventory').where('item_number', '==', line_item.item_number).limit(1).get();
+          if (!invSnapshot.empty) {
+            const vendorItem = invSnapshot.docs[0].data();
+            const packSize = vendorItem.pack_size || 1;
+            for (const component of vendorItem.kit_components || []) {
+              const totalRemoved = line_item.quantity * packSize * (component.yield_multiplier || 1);
+              await db.collection('categories').doc(String(component.category_id)).update({
+                current_count: FieldValue.increment(-totalRemoved),
+                total_procured: FieldValue.increment(-totalRemoved)
+              });
+            }
+          }
+        }
+      }
+
+      // STEP 2: Apply the new order's math
+      if (line_items && line_items.length > 0) {
+        for (const line_item of line_items) {
+          const invSnapshot = await db.collection('inventory').where('item_number', '==', line_item.item_number).limit(1).get();
+          if (!invSnapshot.empty) {
+            const vendorItem = invSnapshot.docs[0].data();
+            const packSize = vendorItem.pack_size || 1;
+            for (const component of vendorItem.kit_components || []) {
+              const totalAdded = line_item.quantity * packSize * (component.yield_multiplier || 1);
+              await db.collection('categories').doc(String(component.category_id)).update({
+                current_count: FieldValue.increment(totalAdded),
+                total_procured: FieldValue.increment(totalAdded)
+              });
+            }
+          }
+        }
+      }
+
+      // STEP 3: Save the updated order document
+      await orderRef.update({
+        order_name, date_ordered, date_delivered, subtotal, shipping, tax, total, procurement_method, logged_by, line_items: line_items || []
       });
+
       res.json({ success: true });
     } catch (error) {
+      console.error("Order update error:", error);
       res.status(500).json({ error: String(error) });
     }
   });
@@ -250,9 +366,40 @@ async function startServer() {
   app.delete('/api/orders/:order_number', async (req, res) => {
     const { order_number } = req.params;
     try {
-      await db.collection('orders').doc(order_number).delete();
+      const orderRef = db.collection('orders').doc(order_number);
+      const orderDoc = await orderRef.get();
+      
+      if (!orderDoc.exists) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+
+      const orderData = orderDoc.data() as any;
+
+      // Revert the category stock based on the kit components
+      if (orderData.line_items && orderData.line_items.length > 0) {
+        for (const line_item of orderData.line_items) {
+          const invSnapshot = await db.collection('inventory').where('item_number', '==', line_item.item_number).limit(1).get();
+          if (!invSnapshot.empty) {
+            const vendorItem = invSnapshot.docs[0].data();
+            const packSize = vendorItem.pack_size || 1;
+            const kitComponents = vendorItem.kit_components || [];
+            
+            for (const component of kitComponents) {
+              const totalRemoved = line_item.quantity * packSize * (component.yield_multiplier || 1);
+              await db.collection('categories').doc(String(component.category_id)).update({
+                current_count: FieldValue.increment(-totalRemoved),
+                total_procured: FieldValue.increment(-totalRemoved)
+              });
+            }
+          }
+        }
+      }
+
+      // Finally, delete the order document
+      await orderRef.delete();
       res.json({ success: true });
     } catch (error) {
+      console.error("Order deletion error:", error);
       res.status(500).json({ error: String(error) });
     }
   });
