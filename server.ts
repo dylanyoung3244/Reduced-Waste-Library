@@ -466,6 +466,51 @@ async function startServer() {
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
+  // --- RESTORE ROUTES (Super Admin Only) ---
+  app.put('/api/restore/requests/:id', requireSuperAdmin, async (req, res) => {
+    try {
+      await db.collection('requests').doc(req.params.id).update({ is_deleted: false });
+      await logAudit(req.headers['x-username'] as string, 'RESTORED_REQUEST', `Restored request ${req.params.id}`, { request_id: req.params.id });
+      res.json({ success: true });
+    } catch (error) { res.status(500).json({ error: String(error) }); }
+  });
+
+  app.put('/api/restore/items/:item_number', requireSuperAdmin, async (req, res) => {
+    try {
+      await db.collection('inventory').doc(req.params.item_number).update({ is_deleted: false });
+      await logAudit(req.headers['x-username'] as string, 'RESTORED_ITEM', `Restored catalog item ${req.params.item_number}`, { item_number: req.params.item_number });
+      res.json({ success: true });
+    } catch (error) { res.status(500).json({ error: String(error) }); }
+  });
+
+  app.put('/api/restore/orders/:order_number', requireSuperAdmin, async (req, res) => {
+    const { order_number } = req.params;
+    try {
+      const orderRef = db.collection('orders').doc(order_number);
+      const orderDoc = await orderRef.get();
+      if (!orderDoc.exists) return res.status(404).json({ error: 'Not found' });
+      const orderData = orderDoc.data() as any;
+
+      // Re-apply the math for the restored procurement order
+      for (const line_item of orderData.line_items || []) {
+        const invSnap = await db.collection('inventory').where('item_number', '==', line_item.item_number).limit(1).get();
+        if (!invSnap.empty) {
+          const vItem = invSnap.docs[0].data();
+          for (const comp of vItem.kit_components || []) {
+            const added = line_item.quantity * (vItem.pack_size || 1) * (comp.yield_multiplier || 1);
+            await db.collection('categories').doc(String(comp.category_id)).update({ 
+              current_count: FieldValue.increment(added), 
+              total_procured: FieldValue.increment(added) 
+            });
+          }
+        }
+      }
+      await orderRef.update({ is_deleted: false });
+      await logAudit(req.headers['x-username'] as string, 'RESTORED_ORDER', `Restored order ${order_number} and re-applied math`, { order_number });
+      res.json({ success: true });
+    } catch (error) { res.status(500).json({ error: String(error) }); }
+  });
+
   app.use('/api', (req, res) => res.status(404).json({ error: 'API route not found' }));
   app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
     res.status(500).json({ error: err.message || 'Internal Server Error' });

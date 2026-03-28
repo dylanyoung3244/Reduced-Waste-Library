@@ -19,6 +19,7 @@ const exportToCSV = (data: any[], filename: string) => {
 export function StaffDashboard() {
   const [activeTab, setActiveTab] = useState<'inventory' | 'requests' | 'procurement' | 'history' | 'catalog' | 'users' | 'settings'>('inventory');
   const [editingOrder, setEditingOrder] = useState<any>(null);
+  const [showDeleted, setShowDeleted] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(() => {
     const saved = sessionStorage.getItem('user');
     return saved ? JSON.parse(saved) : null;
@@ -92,6 +93,17 @@ export function StaffDashboard() {
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Staff Dashboard</h1>
         <div className="flex items-center gap-4">
+          {currentUser.role === 'super_admin' && (
+            <label className="flex items-center gap-2 text-sm font-medium text-slate-700 cursor-pointer">
+              <input 
+                type="checkbox" 
+                checked={showDeleted} 
+                onChange={e => setShowDeleted(e.target.checked)}
+                className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+              />
+              Toggle Recycle Bin View
+            </label>
+          )}
           <span className="text-sm text-slate-600">Logged in as <span className="font-medium text-slate-900">{currentUser.full_name}</span></span>
           <button onClick={handleLogout} className="text-sm text-red-600 hover:text-red-800 font-medium">Logout</button>
         </div>
@@ -119,13 +131,13 @@ export function StaffDashboard() {
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 min-h-[500px]">
         {activeTab === 'inventory' && <InventoryView currentUser={currentUser} />}
-        {activeTab === 'requests' && <RequestsView currentUser={currentUser} />}
+        {activeTab === 'requests' && <RequestsView currentUser={currentUser} showDeleted={showDeleted} />}
         {activeTab === 'procurement' && <ProcurementView currentUser={currentUser} editOrder={editingOrder} onComplete={() => { setActiveTab('history'); setEditingOrder(null); }} />}
-        {activeTab === 'history' && <ProcurementHistoryView currentUser={currentUser} onEditOrder={(order) => {
+        {activeTab === 'history' && <ProcurementHistoryView currentUser={currentUser} showDeleted={showDeleted} onEditOrder={(order) => {
           setEditingOrder(order);
           setActiveTab('procurement');
         }} />}
-        {activeTab === 'catalog' && <CatalogView currentUser={currentUser} />}
+        {activeTab === 'catalog' && <CatalogView currentUser={currentUser} showDeleted={showDeleted} />}
         {activeTab === 'users' && <UserManagementView currentUser={currentUser} />}
         {activeTab === 'settings' && <SystemLogsSettingsView currentUser={currentUser} />}
       </div>
@@ -163,7 +175,12 @@ function InventoryView({ currentUser }: { currentUser: any }) {
     })
       .then(res => res.json())
       .then(data => {
-        setInventory(Array.isArray(data) ? data : []);
+        if (Array.isArray(data)) {
+          setInventory(data);
+        } else {
+          console.error('Expected array but got:', data);
+          setInventory([]);
+        }
         setLoading(false);
       })
       .catch(err => {
@@ -232,7 +249,7 @@ function InventoryView({ currentUser }: { currentUser: any }) {
   );
 }
 
-function RequestsView({ currentUser }: { currentUser: any }) {
+function RequestsView({ currentUser, showDeleted }: { currentUser: any, showDeleted: boolean }) {
   const [requests, setRequests] = useState<Request[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
@@ -259,8 +276,19 @@ function RequestsView({ currentUser }: { currentUser: any }) {
       fetch('/api/requests', { headers: { 'Content-Type': 'application/json', 'x-username': currentUser?.username || '', 'x-user-role': currentUser?.role || '' } }).then(res => res.json()),
       fetch('/api/categories', { headers: { 'Content-Type': 'application/json', 'x-username': currentUser?.username || '', 'x-user-role': currentUser?.role || '' } }).then(res => res.json())
     ]).then(([requestsData, categoriesData]) => {
-      setRequests(Array.isArray(requestsData) ? requestsData : []);
-      setCategories(Array.isArray(categoriesData) ? categoriesData : []);
+      if (Array.isArray(requestsData)) {
+        setRequests(requestsData);
+      } else {
+        console.error('Expected array but got:', requestsData);
+        setRequests([]);
+      }
+      
+      if (Array.isArray(categoriesData)) {
+        setCategories(categoriesData);
+      } else {
+        console.error('Expected array but got:', categoriesData);
+        setCategories([]);
+      }
       setLoading(false);
     }).catch(err => {
       console.error(err);
@@ -390,6 +418,20 @@ function RequestsView({ currentUser }: { currentUser: any }) {
     fetchData();
   };
 
+  const handleRestoreRequest = async (id: string) => {
+    if (confirm(`Are you sure you want to restore request ${id}?`)) {
+      await fetch(`/api/restore/requests/${id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-username': currentUser?.username || '',
+          'x-user-role': currentUser?.role || ''
+        }
+      });
+      fetchData();
+    }
+  };
+
   const handleDownloadTemplate = async (type: string) => {
     try {
       const res = await fetch(`/api/export/template/${type}`, {
@@ -420,14 +462,32 @@ function RequestsView({ currentUser }: { currentUser: any }) {
 
     setBulkUploading(true);
     try {
+      const parseCSV = (str: string) => {
+        const arr: string[][] = [];
+        let quote = false;
+        for (let row = 0, col = 0, c = 0; c < str.length; c++) {
+          let cc = str[c], nc = str[c+1];
+          arr[row] = arr[row] || [];
+          arr[row][col] = arr[row][col] || '';
+          if (cc === '"' && quote && nc === '"') { arr[row][col] += cc; ++c; continue; }
+          if (cc === '"') { quote = !quote; continue; }
+          if (cc === ',' && !quote) { ++col; continue; }
+          if (cc === '\r' && nc === '\n' && !quote) { ++row; col = 0; ++c; continue; }
+          if (cc === '\n' && !quote) { ++row; col = 0; continue; }
+          if (cc === '\r' && !quote) { ++row; col = 0; continue; }
+          arr[row][col] += cc;
+        }
+        return arr;
+      };
+
       const text = await bulkFile.text();
-      const rows = text.split('\n').map(row => row.split(','));
-      const headers = rows[0].map(h => h.trim().replace(/^"|"$/g, ''));
+      const rows = parseCSV(text);
+      const headers = rows[0].map(h => h.trim());
       
       const items = rows.slice(1).filter(row => row.length === headers.length && row[0].trim() !== '').map(row => {
         const item: any = {};
         headers.forEach((header, index) => {
-          item[header] = row[index].trim().replace(/^"|"$/g, '');
+          item[header] = row[index].trim();
         });
         return item;
       });
@@ -502,7 +562,7 @@ function RequestsView({ currentUser }: { currentUser: any }) {
           </div>
         </div>
         <div className="grid grid-cols-1 gap-2">
-          {requests.map(req => (
+          {requests.filter(req => showDeleted ? req.is_deleted : !req.is_deleted).map(req => (
             <div key={req.id} className="border border-slate-200 rounded-xl overflow-hidden bg-white hover:border-slate-300 transition-colors">
               <div 
                 className="flex items-center justify-between p-4 cursor-pointer"
@@ -561,18 +621,29 @@ function RequestsView({ currentUser }: { currentUser: any }) {
                       </div>
                       
                       <div className="flex gap-2">
-                        <button 
-                          onClick={() => handleEditRequest(req)}
-                          className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
-                        >
-                          <Edit className="w-4 h-4" /> Edit Request
-                        </button>
-                        <button 
-                          onClick={() => handleDeleteRequest(req.id)}
-                          className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" /> Delete
-                        </button>
+                        {showDeleted ? (
+                          <button 
+                            onClick={() => handleRestoreRequest(req.id)}
+                            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-emerald-600 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition-colors"
+                          >
+                            <Check className="w-4 h-4" /> Restore
+                          </button>
+                        ) : (
+                          <>
+                            <button 
+                              onClick={() => handleEditRequest(req)}
+                              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+                            >
+                              <Edit className="w-4 h-4" /> Edit Request
+                            </button>
+                            <button 
+                              onClick={() => handleDeleteRequest(req.id)}
+                              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" /> Delete
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
 
@@ -592,7 +663,7 @@ function RequestsView({ currentUser }: { currentUser: any }) {
               )}
             </div>
           ))}
-          {requests.length === 0 && (
+          {requests.filter(req => showDeleted ? req.is_deleted : !req.is_deleted).length === 0 && (
             <div className="text-center py-12 text-slate-500">No requests found.</div>
           )}
         </div>
@@ -717,6 +788,49 @@ function RequestsView({ currentUser }: { currentUser: any }) {
           </div>
         </div>
       )}
+
+      {isBulkUploadOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+              <h3 className="text-xl font-semibold text-slate-900">Bulk Upload Requests</h3>
+              <button onClick={() => setIsBulkUploadOpen(false)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                <X className="w-5 h-5 text-slate-500" />
+              </button>
+            </div>
+            <form onSubmit={handleBulkUpload} className="p-6 space-y-6">
+              <div className="space-y-4">
+                <p className="text-sm text-slate-600">
+                  Upload a CSV file to add multiple requests at once.
+                </p>
+                <button 
+                  type="button"
+                  onClick={() => handleDownloadTemplate('requests')}
+                  className="inline-flex items-center gap-2 text-sm font-medium text-emerald-600 hover:text-emerald-700"
+                >
+                  <Download className="w-4 h-4" /> Download CSV Template
+                </button>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-700">CSV File</label>
+                  <input 
+                    type="file" 
+                    accept=".csv"
+                    required
+                    onChange={e => setBulkFile(e.target.files?.[0] || null)}
+                    className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none" 
+                  />
+                </div>
+              </div>
+              <div className="flex gap-3 pt-4">
+                <button type="button" onClick={() => setIsBulkUploadOpen(false)} className="flex-1 px-4 py-3 rounded-xl border border-slate-300 font-medium hover:bg-slate-50 transition-colors">Cancel</button>
+                <button type="submit" disabled={bulkUploading || !bulkFile} className="flex-1 bg-emerald-600 text-white px-4 py-3 rounded-xl font-medium hover:bg-emerald-700 transition-colors disabled:opacity-50">
+                  {bulkUploading ? 'Uploading...' : 'Upload CSV'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -738,6 +852,9 @@ function ProcurementView({ currentUser, editOrder, onComplete }: { currentUser: 
   const [isUploading, setIsUploading] = useState(false);
   
   const [lineItems, setLineItems] = useState<{item_number: string, quantity: number, price: number}[]>([]);
+  const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false);
+  const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [bulkUploading, setBulkUploading] = useState(false);
 
   useEffect(() => {
     fetch('/api/items', {
@@ -748,7 +865,14 @@ function ProcurementView({ currentUser, editOrder, onComplete }: { currentUser: 
       }
     })
       .then(res => res.json())
-      .then(data => setItems(Array.isArray(data) ? data : []))
+      .then(data => {
+        if (Array.isArray(data)) {
+          setItems(data);
+        } else {
+          console.error('Expected array but got:', data);
+          setItems([]);
+        }
+      })
       .catch(err => {
         console.error(err);
         setItems([]);
@@ -877,6 +1001,93 @@ function ProcurementView({ currentUser, editOrder, onComplete }: { currentUser: 
       alert(error.message || 'Error saving order');
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  const handleDownloadTemplate = async (type: string) => {
+    try {
+      const res = await fetch(`/api/export/template/${type}`, {
+        headers: { 
+          'x-user-role': currentUser?.role || '', 
+          'x-username': currentUser?.username || '' 
+        }
+      });
+      if (!res.ok) throw new Error('Download failed');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${type}_upload_template.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to download template:', err);
+      alert('Failed to download template. Please try again.');
+    }
+  };
+
+  const handleBulkUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!bulkFile) return;
+
+    setBulkUploading(true);
+    try {
+      const parseCSV = (str: string) => {
+        const arr: string[][] = [];
+        let quote = false;
+        for (let row = 0, col = 0, c = 0; c < str.length; c++) {
+          let cc = str[c], nc = str[c+1];
+          arr[row] = arr[row] || [];
+          arr[row][col] = arr[row][col] || '';
+          if (cc === '"' && quote && nc === '"') { arr[row][col] += cc; ++c; continue; }
+          if (cc === '"') { quote = !quote; continue; }
+          if (cc === ',' && !quote) { ++col; continue; }
+          if (cc === '\r' && nc === '\n' && !quote) { ++row; col = 0; ++c; continue; }
+          if (cc === '\n' && !quote) { ++row; col = 0; continue; }
+          if (cc === '\r' && !quote) { ++row; col = 0; continue; }
+          arr[row][col] += cc;
+        }
+        return arr;
+      };
+
+      const text = await bulkFile.text();
+      const rows = parseCSV(text);
+      const headers = rows[0].map(h => h.trim());
+      
+      const items = rows.slice(1).filter(row => row.length === headers.length && row[0].trim() !== '').map(row => {
+        const item: any = {};
+        headers.forEach((header, index) => {
+          item[header] = row[index].trim();
+        });
+        return item;
+      });
+
+      const response = await fetch('/api/bulk-upload/orders', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-username': currentUser?.username || '',
+          'x-user-role': currentUser?.role || ''
+        },
+        body: JSON.stringify({ items })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to bulk upload orders');
+      }
+
+      alert('Bulk upload successful!');
+      setIsBulkUploadOpen(false);
+      setBulkFile(null);
+      if (onComplete) onComplete();
+    } catch (error: any) {
+      console.error(error);
+      alert(`Error: ${error.message}`);
+    } finally {
+      setBulkUploading(false);
     }
   };
 
@@ -1075,7 +1286,7 @@ function ProcurementView({ currentUser, editOrder, onComplete }: { currentUser: 
   );
 }
 
-function ProcurementHistoryView({ currentUser, onEditOrder }: { currentUser: any, onEditOrder: (order: any) => void }) {
+function ProcurementHistoryView({ currentUser, onEditOrder, showDeleted }: { currentUser: any, onEditOrder: (order: any) => void, showDeleted: boolean }) {
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
@@ -1091,7 +1302,12 @@ function ProcurementHistoryView({ currentUser, onEditOrder }: { currentUser: any
       });
       if (!res.ok) console.error('Failed to fetch orders', await res.text());
       const data = await res.json();
-      setOrders(Array.isArray(data) ? data : []);
+      if (Array.isArray(data)) {
+        setOrders(data);
+      } else {
+        console.error('Expected array but got:', data);
+        setOrders([]);
+      }
       setLoading(false);
     } catch (err) {
       console.error(err);
@@ -1108,6 +1324,20 @@ function ProcurementHistoryView({ currentUser, onEditOrder }: { currentUser: any
     if (confirm(`Are you sure you want to delete order ${orderNumber}? This will remove all associated line items and update inventory counts.`)) {
       await fetch(`/api/orders/${orderNumber}`, { 
         method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-username': currentUser?.username || '',
+          'x-user-role': currentUser?.role || ''
+        }
+      });
+      fetchOrders();
+    }
+  };
+
+  const handleRestoreOrder = async (orderNumber: string) => {
+    if (confirm(`Are you sure you want to restore order ${orderNumber}? This will re-apply all associated line items and update inventory counts.`)) {
+      await fetch(`/api/restore/orders/${orderNumber}`, {
+        method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           'x-username': currentUser?.username || '',
@@ -1145,7 +1375,7 @@ function ProcurementHistoryView({ currentUser, onEditOrder }: { currentUser: any
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {orders.map(order => (
+            {orders.filter(order => showDeleted ? order.is_deleted : !order.is_deleted).map(order => (
               <React.Fragment key={order.order_number}>
                 <tr className="hover:bg-slate-50/50 transition-colors group cursor-pointer" onClick={() => setExpandedOrder(expandedOrder === order.order_number ? null : order.order_number)}>
                   <td className="px-4 py-3 font-medium text-slate-900">{order.order_number}</td>
@@ -1166,18 +1396,29 @@ function ProcurementHistoryView({ currentUser, onEditOrder }: { currentUser: any
                         <ExternalLink className="w-3 h-3" /> Receipt
                       </a>
                     )}
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); onEditOrder(order); }}
-                      className="text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-colors"
-                    >
-                      Edit
-                    </button>
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); handleDelete(order.order_number); }}
-                      className="text-red-600 hover:text-red-800 font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors"
-                    >
-                      Delete
-                    </button>
+                    {showDeleted ? (
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); handleRestoreOrder(order.order_number); }}
+                        className="text-emerald-600 hover:text-emerald-800 font-medium px-2 py-1 rounded hover:bg-emerald-50 transition-colors"
+                      >
+                        Restore
+                      </button>
+                    ) : (
+                      <>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); onEditOrder(order); }}
+                          className="text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-colors"
+                        >
+                          Edit
+                        </button>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); handleDelete(order.order_number); }}
+                          className="text-red-600 hover:text-red-800 font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors"
+                        >
+                          Delete
+                        </button>
+                      </>
+                    )}
                   </td>
                 </tr>
                 {expandedOrder === order.order_number && (
@@ -1223,7 +1464,7 @@ function ProcurementHistoryView({ currentUser, onEditOrder }: { currentUser: any
                 )}
               </React.Fragment>
             ))}
-            {orders.length === 0 && (
+            {orders.filter(order => showDeleted ? order.is_deleted : !order.is_deleted).length === 0 && (
               <tr>
                 <td colSpan={7} className="px-4 py-8 text-center text-slate-500">No procurement history found.</td>
               </tr>
@@ -1235,7 +1476,7 @@ function ProcurementHistoryView({ currentUser, onEditOrder }: { currentUser: any
   );
 }
 
-function CatalogView({ currentUser }: { currentUser: any }) {
+function CatalogView({ currentUser, showDeleted }: { currentUser: any, showDeleted: boolean }) {
   const [items, setItems] = useState<Item[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1260,8 +1501,19 @@ function CatalogView({ currentUser }: { currentUser: any }) {
       fetch('/api/items', { headers: { 'Content-Type': 'application/json', 'x-username': currentUser?.username || '', 'x-user-role': currentUser?.role || '' } }).then(res => res.json()),
       fetch('/api/categories', { headers: { 'Content-Type': 'application/json', 'x-username': currentUser?.username || '', 'x-user-role': currentUser?.role || '' } }).then(res => res.json())
     ]).then(([itemsData, categoriesData]) => {
-      setItems(Array.isArray(itemsData) ? itemsData : []);
-      setCategories(Array.isArray(categoriesData) ? categoriesData : []);
+      if (Array.isArray(itemsData)) {
+        setItems(itemsData);
+      } else {
+        console.error('Expected array but got:', itemsData);
+        setItems([]);
+      }
+      
+      if (Array.isArray(categoriesData)) {
+        setCategories(categoriesData);
+      } else {
+        console.error('Expected array but got:', categoriesData);
+        setCategories([]);
+      }
       setLoading(false);
     }).catch(err => {
       console.error(err);
@@ -1291,6 +1543,20 @@ function CatalogView({ currentUser }: { currentUser: any }) {
     if (confirm(`Are you sure you want to delete item ${itemNumber}?`)) {
       await fetch(`/api/items/${itemNumber}`, { 
         method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-username': currentUser?.username || '',
+          'x-user-role': currentUser?.role || ''
+        }
+      });
+      fetchData();
+    }
+  };
+
+  const handleRestoreItem = async (itemNumber: string) => {
+    if (confirm(`Are you sure you want to restore item ${itemNumber}?`)) {
+      await fetch(`/api/restore/items/${itemNumber}`, {
+        method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           'x-username': currentUser?.username || '',
@@ -1358,14 +1624,32 @@ function CatalogView({ currentUser }: { currentUser: any }) {
 
     setBulkUploading(true);
     try {
+      const parseCSV = (str: string) => {
+        const arr: string[][] = [];
+        let quote = false;
+        for (let row = 0, col = 0, c = 0; c < str.length; c++) {
+          let cc = str[c], nc = str[c+1];
+          arr[row] = arr[row] || [];
+          arr[row][col] = arr[row][col] || '';
+          if (cc === '"' && quote && nc === '"') { arr[row][col] += cc; ++c; continue; }
+          if (cc === '"') { quote = !quote; continue; }
+          if (cc === ',' && !quote) { ++col; continue; }
+          if (cc === '\r' && nc === '\n' && !quote) { ++row; col = 0; ++c; continue; }
+          if (cc === '\n' && !quote) { ++row; col = 0; continue; }
+          if (cc === '\r' && !quote) { ++row; col = 0; continue; }
+          arr[row][col] += cc;
+        }
+        return arr;
+      };
+
       const text = await bulkFile.text();
-      const rows = text.split('\n').map(row => row.split(','));
-      const headers = rows[0].map(h => h.trim().replace(/^"|"$/g, ''));
+      const rows = parseCSV(text);
+      const headers = rows[0].map(h => h.trim());
       
       const items = rows.slice(1).filter(row => row.length === headers.length && row[0].trim() !== '').map(row => {
         const item: any = {};
         headers.forEach((header, index) => {
-          item[header] = row[index].trim().replace(/^"|"$/g, '');
+          item[header] = row[index].trim();
         });
         return item;
       });
@@ -1453,7 +1737,7 @@ function CatalogView({ currentUser }: { currentUser: any }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {items.map(item => (
+              {items.filter(item => showDeleted ? item.is_deleted : !item.is_deleted).map(item => (
                 <tr key={item.item_number} className="hover:bg-slate-50/50 transition-colors">
                   <td className="px-4 py-3">
                     <div className="font-medium text-slate-900 flex items-center gap-2">
@@ -1471,12 +1755,18 @@ function CatalogView({ currentUser }: { currentUser: any }) {
                     <div className="text-xs text-slate-500">${item.price?.toFixed(2)} • {item.pack_size} per case</div>
                   </td>
                   <td className="px-4 py-3 text-right space-x-2">
-                    <button onClick={() => handleEdit(item)} className="text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-colors">Edit</button>
-                    <button onClick={() => handleDelete(item.item_number)} className="text-red-600 hover:text-red-800 font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors">Delete</button>
+                    {showDeleted ? (
+                      <button onClick={() => handleRestoreItem(item.item_number)} className="text-emerald-600 hover:text-emerald-800 font-medium px-2 py-1 rounded hover:bg-emerald-50 transition-colors">Restore</button>
+                    ) : (
+                      <>
+                        <button onClick={() => handleEdit(item)} className="text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-colors">Edit</button>
+                        <button onClick={() => handleDelete(item.item_number)} className="text-red-600 hover:text-red-800 font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors">Delete</button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}
-              {items.length === 0 && (
+              {items.filter(item => showDeleted ? item.is_deleted : !item.is_deleted).length === 0 && (
                 <tr>
                   <td colSpan={3} className="px-4 py-8 text-center text-slate-500">No items found.</td>
                 </tr>
@@ -1652,7 +1942,12 @@ function UserManagementView({ currentUser }: { currentUser: any }) {
     })
       .then(res => res.json())
       .then(data => {
-        setUsers(Array.isArray(data) ? data : []);
+        if (Array.isArray(data)) {
+          setUsers(data);
+        } else {
+          console.error('Expected array but got:', data);
+          setUsers([]);
+        }
         setLoading(false);
       })
       .catch(err => {
@@ -1866,7 +2161,13 @@ function SystemLogsSettingsView({ currentUser }: { currentUser: any }) {
       fetch('/api/audit_logs', { headers: { 'Content-Type': 'application/json', 'x-username': currentUser?.username || '', 'x-user-role': currentUser?.role || '' } }).then(res => res.json()),
       fetch('/api/settings', { headers: { 'Content-Type': 'application/json', 'x-username': currentUser?.username || '', 'x-user-role': currentUser?.role || '' } }).then(res => res.json())
     ]).then(([logsData, settingsData]) => {
-      setLogs(Array.isArray(logsData) ? logsData : []);
+      if (Array.isArray(logsData)) {
+        setLogs(logsData);
+      } else {
+        console.error('Expected array but got:', logsData);
+        setLogs([]);
+      }
+      
       if (settingsData && !settingsData.error) {
         setSettings({
           request_notification_email: settingsData.request_notification_email || '',
