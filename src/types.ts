@@ -26,6 +26,8 @@ export type Request = {
   id: string;
   request_id: string | number;
   requester_name: string;
+  requester_email?: string;
+  requester_phone?: string;
   department: string;
   event_name: string;
   check_out_date: string;
@@ -50,5 +52,6 @@ export type Item = {
   name: string;
   price: number;
   pack_size: number;
+  reorder_url?: string;
   kit_components: KitComponent[];
 };

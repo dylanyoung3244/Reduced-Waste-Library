@@ -40,6 +40,8 @@ export function PublicForm() {
 
   const [formData, setFormData] = useState({
     requester_name: '',
+    requester_email: '',
+    requester_phone: '',
     department: '',
     event_name: '',
     check_out_date: '',
@@ -157,6 +159,8 @@ export function PublicForm() {
       setSuccess(true);
       setFormData({
         requester_name: '',
+        requester_email: '',
+        requester_phone: '',
         department: '',
         event_name: '',
         check_out_date: '',
@@ -222,6 +226,30 @@ export function PublicForm() {
                 onChange={handleInputChange}
                 className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
                 placeholder="Jane Doe"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">Email Address</label>
+              <input 
+                required
+                type="email" 
+                name="requester_email"
+                value={formData.requester_email}
+                onChange={handleInputChange}
+                className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
+                placeholder="jane@example.com"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">Phone Number</label>
+              <input 
+                required
+                type="tel" 
+                name="requester_phone"
+                value={formData.requester_phone}
+                onChange={handleInputChange}
+                className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
+                placeholder="(555) 123-4567"
               />
             </div>
             <div className="space-y-2">
