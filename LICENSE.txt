@@ -1,0 +1,3 @@
+Copyright (c) 2026 Dylan Young. All Rights Reserved.
+This software ("Reduced Waste Library") was developed independently outside of the scope of employment. It is provided to the County of Hawaiʻi 
+OSCER under a perpetual, non-exclusive, royalty-free license for internal municipal use only. The creator retains all underlying intellectual property rights, titles, and source code ownership.
