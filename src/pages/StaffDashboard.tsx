@@ -1,6 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { InventoryItem, Request, Category, Item } from '../types';
-import { Package, ClipboardList, ShoppingCart, Plus, Check, X, Download, Users, Edit, ChevronDown, ChevronUp, Trash2, ExternalLink, Upload } from 'lucide-react';
+import { Package, ClipboardList, ShoppingCart, Plus, Check, X, Download, Users, Edit, ChevronDown, ChevronUp, Trash2, ExternalLink, Upload, HelpCircle } from 'lucide-react';
+
+const HelpModal = ({ isOpen, onClose, title, children }: { isOpen: boolean, onClose: () => void, title: string, children: React.ReactNode }) => {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+        <div className="flex justify-between items-center p-6 border-b">
+          <h2 className="text-2xl font-bold text-gray-800">{title}</h2>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-800 text-2xl font-bold">&times;</button>
+        </div>
+        <div className="p-6 overflow-y-auto text-gray-700 space-y-4 text-left">
+          {children}
+        </div>
+        <div className="p-4 border-t bg-gray-50 flex justify-end rounded-b-lg">
+          <button onClick={onClose} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Understood</button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const exportToCSV = (data: any[], filename: string) => {
   if (!data || data.length === 0) return;
@@ -250,6 +270,7 @@ function InventoryView({ currentUser }: { currentUser: any }) {
 }
 
 function RequestsView({ currentUser, showDeleted }: { currentUser: any, showDeleted: boolean }) {
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [requests, setRequests] = useState<Request[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
@@ -267,9 +288,6 @@ function RequestsView({ currentUser, showDeleted }: { currentUser: any, showDele
     status: 'Awaiting'
   });
   const [requestLineItems, setRequestLineItems] = useState<any[]>([]);
-  const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false);
-  const [bulkFile, setBulkFile] = useState<File | null>(null);
-  const [bulkUploading, setBulkUploading] = useState(false);
 
   const fetchData = () => {
     Promise.all([
@@ -432,107 +450,18 @@ function RequestsView({ currentUser, showDeleted }: { currentUser: any, showDele
     }
   };
 
-  const handleDownloadTemplate = async (type: string) => {
-    try {
-      const res = await fetch(`/api/export/template/${type}`, {
-        headers: { 
-          'x-user-role': currentUser?.role || '', 
-          'x-username': currentUser?.username || '' 
-        }
-      });
-      if (!res.ok) throw new Error('Download failed');
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${type}_upload_template.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('Failed to download template:', err);
-      alert('Failed to download template. Please try again.');
-    }
-  };
-
-  const handleBulkUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!bulkFile) return;
-
-    setBulkUploading(true);
-    try {
-      const parseCSV = (str: string) => {
-        const arr: string[][] = [];
-        let quote = false;
-        for (let row = 0, col = 0, c = 0; c < str.length; c++) {
-          let cc = str[c], nc = str[c+1];
-          arr[row] = arr[row] || [];
-          arr[row][col] = arr[row][col] || '';
-          if (cc === '"' && quote && nc === '"') { arr[row][col] += cc; ++c; continue; }
-          if (cc === '"') { quote = !quote; continue; }
-          if (cc === ',' && !quote) { ++col; continue; }
-          if (cc === '\r' && nc === '\n' && !quote) { ++row; col = 0; ++c; continue; }
-          if (cc === '\n' && !quote) { ++row; col = 0; continue; }
-          if (cc === '\r' && !quote) { ++row; col = 0; continue; }
-          arr[row][col] += cc;
-        }
-        return arr;
-      };
-
-      const text = await bulkFile.text();
-      const rows = parseCSV(text);
-      const headers = rows[0].map(h => h.trim());
-      
-      const items = rows.slice(1).filter(row => row.length === headers.length && row[0].trim() !== '').map(row => {
-        const item: any = {};
-        headers.forEach((header, index) => {
-          item[header] = row[index].trim();
-        });
-        return item;
-      });
-
-      const response = await fetch('/api/bulk-upload/requests', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-username': currentUser?.username || '',
-          'x-user-role': currentUser?.role || ''
-        },
-        body: JSON.stringify({ items })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to bulk upload requests');
-      }
-
-      alert('Bulk upload successful!');
-      setIsBulkUploadOpen(false);
-      setBulkFile(null);
-      fetchData();
-    } catch (error: any) {
-      console.error(error);
-      alert(`Error: ${error.message}`);
-    } finally {
-      setBulkUploading(false);
-    }
-  };
-
   if (loading) return <div className="animate-pulse space-y-4"><div className="h-10 bg-slate-100 rounded-lg w-full"></div></div>;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      <div className="lg:col-span-2 space-y-4">
-        <div className="flex justify-between items-center">
-          <h2 className="text-xl font-semibold text-slate-900">Requests Queue</h2>
+    <div className="space-y-6">
+      <div className="bg-blue-50 text-blue-800 p-4 rounded-xl text-sm border border-blue-100">
+        <strong className="font-semibold">Workflow Guide:</strong> New requests start as Awaiting. Change to Approved to notify the user they can pick up the items. Change to Checked-out when items leave the building (this decreases inventory). Change to Checked-in when items are returned (this restores inventory for reusable items). Use Denied if the request cannot be fulfilled.
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 space-y-4">
+          <div className="flex justify-between items-center">
+            <h2 className="text-xl font-semibold text-slate-900">Requests Queue</h2>
           <div className="flex gap-2">
-            <button 
-              onClick={() => setIsBulkUploadOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 transition-colors"
-            >
-              <Upload className="w-4 h-4" /> Bulk Upload
-            </button>
             <button 
               onClick={() => {
                 setEditingRequest(null);
@@ -559,8 +488,27 @@ function RequestsView({ currentUser, showDeleted }: { currentUser: any, showDele
             >
               <Download className="w-4 h-4" /> Export to CSV
             </button>
+            <button 
+              onClick={() => setIsHelpOpen(true)}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition-colors"
+            >
+              <HelpCircle className="w-4 h-4" /> How to use this page
+            </button>
           </div>
         </div>
+
+        <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} title="Requests Workflow Walkthrough">
+          <p><strong>What is this page?</strong> This is where you manage item requests submitted by staff or the public. You must update the status of each request as it moves through the real-world process.</p>
+          <h3 className="font-bold text-lg mt-4 text-blue-800">The Step-by-Step Status Workflow:</h3>
+          <ul className="list-disc pl-5 space-y-2">
+            <li><span className="bg-yellow-100 font-semibold px-1 rounded">Awaiting:</span> A brand new request. No action has been taken yet. Review it to see if we have enough inventory to fulfill it.</li>
+            <li><span className="bg-blue-100 font-semibold px-1 rounded">Approved:</span> You have reviewed the request and set aside the items. <em>Action:</em> Changing the status to Approved will automatically email the requester telling them their items are ready for pickup!</li>
+            <li><span className="bg-green-100 font-semibold px-1 rounded">Checked-out:</span> The person has physically picked up the items and left the building. <em>Action:</em> Changing to this status automatically subtracts the items from our inventory. If this causes an item to drop below its "Low Stock Threshold," the system will automatically email the team to reorder it.</li>
+            <li><span className="bg-purple-100 font-semibold px-1 rounded">Checked-in:</span> The person has returned the items. <em>Action:</em> Changing to this status will automatically add reusable items back into our available inventory. Consumable items (like paper plates) will not be added back.</li>
+            <li><span className="bg-red-100 font-semibold px-1 rounded">Denied:</span> We cannot fulfill the request. This restores the items to inventory if they were previously checked out.</li>
+          </ul>
+        </HelpModal>
+
         <div className="grid grid-cols-1 gap-2">
           {requests.filter(req => showDeleted ? req.is_deleted : !req.is_deleted).map(req => (
             <div key={req.id} className="border border-slate-200 rounded-xl overflow-hidden bg-white hover:border-slate-300 transition-colors">
@@ -788,54 +736,13 @@ function RequestsView({ currentUser, showDeleted }: { currentUser: any, showDele
           </div>
         </div>
       )}
-
-      {isBulkUploadOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
-            <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-              <h3 className="text-xl font-semibold text-slate-900">Bulk Upload Requests</h3>
-              <button onClick={() => setIsBulkUploadOpen(false)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-                <X className="w-5 h-5 text-slate-500" />
-              </button>
-            </div>
-            <form onSubmit={handleBulkUpload} className="p-6 space-y-6">
-              <div className="space-y-4">
-                <p className="text-sm text-slate-600">
-                  Upload a CSV file to add multiple requests at once.
-                </p>
-                <button 
-                  type="button"
-                  onClick={() => handleDownloadTemplate('requests')}
-                  className="inline-flex items-center gap-2 text-sm font-medium text-emerald-600 hover:text-emerald-700"
-                >
-                  <Download className="w-4 h-4" /> Download CSV Template
-                </button>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-slate-700">CSV File</label>
-                  <input 
-                    type="file" 
-                    accept=".csv"
-                    required
-                    onChange={e => setBulkFile(e.target.files?.[0] || null)}
-                    className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none" 
-                  />
-                </div>
-              </div>
-              <div className="flex gap-3 pt-4">
-                <button type="button" onClick={() => setIsBulkUploadOpen(false)} className="flex-1 px-4 py-3 rounded-xl border border-slate-300 font-medium hover:bg-slate-50 transition-colors">Cancel</button>
-                <button type="submit" disabled={bulkUploading || !bulkFile} className="flex-1 bg-emerald-600 text-white px-4 py-3 rounded-xl font-medium hover:bg-emerald-700 transition-colors disabled:opacity-50">
-                  {bulkUploading ? 'Uploading...' : 'Upload CSV'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+    </div>
     </div>
   );
 }
 
 function ProcurementView({ currentUser, editOrder, onComplete }: { currentUser: any, editOrder?: any, onComplete?: () => void }) {
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [items, setItems] = useState<Item[]>([]);
   const [formData, setFormData] = useState({
     order_number: '',
@@ -852,9 +759,6 @@ function ProcurementView({ currentUser, editOrder, onComplete }: { currentUser: 
   const [isUploading, setIsUploading] = useState(false);
   
   const [lineItems, setLineItems] = useState<{item_number: string, quantity: number, price: number}[]>([]);
-  const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false);
-  const [bulkFile, setBulkFile] = useState<File | null>(null);
-  const [bulkUploading, setBulkUploading] = useState(false);
 
   useEffect(() => {
     fetch('/api/items', {
@@ -1004,104 +908,33 @@ function ProcurementView({ currentUser, editOrder, onComplete }: { currentUser: 
     }
   };
 
-  const handleDownloadTemplate = async (type: string) => {
-    try {
-      const res = await fetch(`/api/export/template/${type}`, {
-        headers: { 
-          'x-user-role': currentUser?.role || '', 
-          'x-username': currentUser?.username || '' 
-        }
-      });
-      if (!res.ok) throw new Error('Download failed');
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${type}_upload_template.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('Failed to download template:', err);
-      alert('Failed to download template. Please try again.');
-    }
-  };
-
-  const handleBulkUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!bulkFile) return;
-
-    setBulkUploading(true);
-    try {
-      const parseCSV = (str: string) => {
-        const arr: string[][] = [];
-        let quote = false;
-        for (let row = 0, col = 0, c = 0; c < str.length; c++) {
-          let cc = str[c], nc = str[c+1];
-          arr[row] = arr[row] || [];
-          arr[row][col] = arr[row][col] || '';
-          if (cc === '"' && quote && nc === '"') { arr[row][col] += cc; ++c; continue; }
-          if (cc === '"') { quote = !quote; continue; }
-          if (cc === ',' && !quote) { ++col; continue; }
-          if (cc === '\r' && nc === '\n' && !quote) { ++row; col = 0; ++c; continue; }
-          if (cc === '\n' && !quote) { ++row; col = 0; continue; }
-          if (cc === '\r' && !quote) { ++row; col = 0; continue; }
-          arr[row][col] += cc;
-        }
-        return arr;
-      };
-
-      const text = await bulkFile.text();
-      const rows = parseCSV(text);
-      const headers = rows[0].map(h => h.trim());
-      
-      const items = rows.slice(1).filter(row => row.length === headers.length && row[0].trim() !== '').map(row => {
-        const item: any = {};
-        headers.forEach((header, index) => {
-          item[header] = row[index].trim();
-        });
-        return item;
-      });
-
-      const response = await fetch('/api/bulk-upload/orders', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-username': currentUser?.username || '',
-          'x-user-role': currentUser?.role || ''
-        },
-        body: JSON.stringify({ items })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to bulk upload orders');
-      }
-
-      alert('Bulk upload successful!');
-      setIsBulkUploadOpen(false);
-      setBulkFile(null);
-      if (onComplete) onComplete();
-    } catch (error: any) {
-      console.error(error);
-      alert(`Error: ${error.message}`);
-    } finally {
-      setBulkUploading(false);
-    }
-  };
-
   return (
-    <div className="max-w-3xl">
+    <div className="space-y-6 max-w-3xl">
+      <div className="bg-blue-50 text-blue-800 p-4 rounded-xl text-sm border border-blue-100">
+        <strong className="font-semibold">Procurement Guide:</strong> Logging a new order automatically increases the Total Procured and Current Count for the category. If an item is part of a Kit, the system will automatically calculate the yield multiplier and distribute the inventory to the correct components. You may attach a PDF or image receipt for your records.
+      </div>
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-xl font-semibold text-slate-900">{editOrder ? 'Edit Order' : 'Log Incoming Order'}</h2>
         <button 
-          onClick={() => setIsBulkUploadOpen(true)}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 transition-colors"
+          onClick={() => setIsHelpOpen(true)}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition-colors"
         >
-          <Upload className="w-4 h-4" /> Bulk Upload
+          <HelpCircle className="w-4 h-4" /> How to use this page
         </button>
       </div>
+
+      <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} title="Procurement (Orders) Walkthrough">
+        <p><strong>What is this page?</strong> This is where you tell the system that you bought new items to restock the library.</p>
+        <h3 className="font-bold text-lg mt-4 text-blue-800">How to Log a Restock:</h3>
+        <ol className="list-decimal pl-5 space-y-2">
+          <li>Click <strong>Log Procurement</strong>.</li>
+          <li>Enter the Order Number (from your receipt or invoice).</li>
+          <li>Upload a PDF or photo of the receipt so the finance team has a permanent record.</li>
+          <li>Add the items you bought. <em>Note:</em> The quantity you enter is the number of <strong>Packs</strong> you bought, not the individual items. The system will multiply your quantity by the item's Pack Size automatically!</li>
+          <li>Click Save. The system instantly adds these items to your Total Inventory count so they are ready to be requested.</li>
+        </ol>
+      </HelpModal>
+
       <form onSubmit={handleSubmit} className="space-y-8">
         <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 space-y-4">
           <h3 className="font-medium text-slate-900 border-b border-slate-200 pb-2">Order Details</h3>
@@ -1239,49 +1072,6 @@ function ProcurementView({ currentUser, editOrder, onComplete }: { currentUser: 
           {isUploading ? 'Uploading & Submitting...' : 'Submit Complete Order'}
         </button>
       </form>
-
-      {isBulkUploadOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
-            <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-              <h3 className="text-xl font-semibold text-slate-900">Bulk Upload Orders</h3>
-              <button onClick={() => setIsBulkUploadOpen(false)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-                <X className="w-5 h-5 text-slate-500" />
-              </button>
-            </div>
-            <form onSubmit={handleBulkUpload} className="p-6 space-y-6">
-              <div className="space-y-4">
-                <p className="text-sm text-slate-600">
-                  Upload a CSV file to add multiple orders at once.
-                </p>
-                <button 
-                  type="button"
-                  onClick={() => handleDownloadTemplate('orders')}
-                  className="inline-flex items-center gap-2 text-sm font-medium text-emerald-600 hover:text-emerald-700"
-                >
-                  <Download className="w-4 h-4" /> Download CSV Template
-                </button>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-slate-700">CSV File</label>
-                  <input 
-                    type="file" 
-                    accept=".csv"
-                    required
-                    onChange={e => setBulkFile(e.target.files?.[0] || null)}
-                    className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none" 
-                  />
-                </div>
-              </div>
-              <div className="flex gap-3 pt-4">
-                <button type="button" onClick={() => setIsBulkUploadOpen(false)} className="flex-1 px-4 py-3 rounded-xl border border-slate-300 font-medium hover:bg-slate-50 transition-colors">Cancel</button>
-                <button type="submit" disabled={bulkUploading || !bulkFile} className="flex-1 bg-emerald-600 text-white px-4 py-3 rounded-xl font-medium hover:bg-emerald-700 transition-colors disabled:opacity-50">
-                  {bulkUploading ? 'Uploading...' : 'Upload CSV'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -1477,6 +1267,7 @@ function ProcurementHistoryView({ currentUser, onEditOrder, showDeleted }: { cur
 }
 
 function CatalogView({ currentUser, showDeleted }: { currentUser: any, showDeleted: boolean }) {
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [items, setItems] = useState<Item[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1708,10 +1499,15 @@ function CatalogView({ currentUser, showDeleted }: { currentUser: any, showDelet
   if (loading) return <div className="animate-pulse space-y-4"><div className="h-10 bg-slate-100 rounded-lg w-full"></div></div>;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-      <div className="space-y-4">
-        <div className="flex justify-between items-center">
-          <h2 className="text-xl font-semibold text-slate-900">Catalog Items</h2>
+    <div className="space-y-6">
+      <div className="bg-blue-50 text-blue-800 p-4 rounded-xl text-sm border border-blue-100">
+        <strong className="font-semibold">Catalog & Inventory Guide:</strong> This tab manages the master list of requestable items.<br/>
+        <strong className="font-semibold">Automated Reorder Alerts:</strong> Reorder warning emails are triggered automatically when a request is moved to 'Checked-out' and the resulting inventory count drops below the 'Low Stock Threshold' set in the Categories tab.
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <div className="space-y-4">
+          <div className="flex justify-between items-center">
+            <h2 className="text-xl font-semibold text-slate-900">Catalog Items</h2>
           <div className="flex gap-2">
             <button 
               onClick={() => setIsBulkUploadOpen(true)}
@@ -1725,8 +1521,25 @@ function CatalogView({ currentUser, showDeleted }: { currentUser: any, showDelet
             >
               <Download className="w-4 h-4" /> Export to CSV
             </button>
+            <button 
+              onClick={() => setIsHelpOpen(true)}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition-colors"
+            >
+              <HelpCircle className="w-4 h-4" /> How to use this page
+            </button>
           </div>
         </div>
+
+        <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} title="Catalog & Inventory Walkthrough">
+          <p><strong>What is this page?</strong> This is the master database of every physical item the library offers. If an item does not exist here, it cannot be requested or ordered.</p>
+          <h3 className="font-bold text-lg mt-4 text-blue-800">Key Terms You Need to Know:</h3>
+          <ul className="list-disc pl-5 space-y-3">
+            <li><strong>Pack Size:</strong> How many individual items come in a single box? For example, if you buy 1 box of compostable forks, and the box contains 50 forks, the Pack Size is 50. The system will automatically multiply your orders by this number.</li>
+            <li><strong>Kits / Kit Components:</strong> A "Kit" is a bundled package (e.g., a "Party Pack" that contains forks, plates, and cups). If you add an item as a Kit, you can assign it "Components." When a request is made for 1 Party Pack, the system knows to subtract the individual forks, plates, and cups from the master inventory.</li>
+            <li><strong>Low Stock Threshold:</strong> This is your safety net. If you set the threshold to 100, the system will automatically send an email alert to the team the moment our current inventory drops to 99 so you can buy more.</li>
+          </ul>
+        </HelpModal>
+
         <div className="overflow-x-auto bg-white border border-slate-200 rounded-xl shadow-sm">
           <table className="w-full text-left text-sm">
             <thead className="bg-slate-50 text-slate-600 font-medium border-b border-slate-200">
@@ -1916,6 +1729,7 @@ function CatalogView({ currentUser, showDeleted }: { currentUser: any, showDelet
           </div>
         </div>
       )}
+    </div>
     </div>
   );
 }
@@ -2149,6 +1963,7 @@ function UserManagementView({ currentUser }: { currentUser: any }) {
 }
 
 function SystemLogsSettingsView({ currentUser }: { currentUser: any }) {
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [logs, setLogs] = useState<any[]>([]);
   const [settings, setSettings] = useState({
     request_notification_email: '',
@@ -2211,17 +2026,47 @@ function SystemLogsSettingsView({ currentUser }: { currentUser: any }) {
   if (loading) return <div className="animate-pulse space-y-4"><div className="h-10 bg-slate-100 rounded-lg w-full"></div></div>;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      <div className="lg:col-span-2 space-y-4">
+    <div className="space-y-6">
+      <div className="bg-blue-50 text-blue-800 p-4 rounded-xl text-sm border border-blue-100">
+        <strong className="font-semibold block mb-2">User Roles & Permissions:</strong>
+        <ul className="list-disc pl-5 space-y-1">
+          <li><strong>Super Admin:</strong> Full system access. Can view the Recycle Bin, restore deleted records, edit global email settings, and manage user roles.</li>
+          <li><strong>Admin:</strong> Can process requests, log procurement orders, add/edit catalog items, and create basic users.</li>
+          <li><strong>Staff / Audit:</strong> Standard access. Can view inventory, requests, and historical data, but cannot modify system settings or delete records.</li>
+        </ul>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 space-y-4">
         <div className="flex justify-between items-center">
           <h2 className="text-xl font-semibold text-slate-900">System Audit Logs</h2>
-          <button 
-            onClick={() => exportToCSV(logs.map(l => ({...l, metadata: l.metadata ? JSON.stringify(l.metadata) : ''})), 'audit_logs.csv')}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
-          >
-            <Download className="w-4 h-4" /> Export to CSV
-          </button>
+          <div className="flex gap-2">
+            <button 
+              onClick={() => exportToCSV(logs.map(l => ({...l, metadata: l.metadata ? JSON.stringify(l.metadata) : ''})), 'audit_logs.csv')}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
+            >
+              <Download className="w-4 h-4" /> Export to CSV
+            </button>
+            <button 
+              onClick={() => setIsHelpOpen(true)}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition-colors"
+            >
+              <HelpCircle className="w-4 h-4" /> How to use this page
+            </button>
+          </div>
         </div>
+
+        <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} title="System Roles & Settings Walkthrough">
+          <p><strong>What is this page?</strong> This handles system security, automated email triggers, and the master audit log.</p>
+          <h3 className="font-bold text-lg mt-4 text-blue-800">Security Roles Explained:</h3>
+          <ul className="list-disc pl-5 space-y-2">
+            <li><span className="font-bold">Super Admin:</span> Has god-mode access. Can edit backend email settings, create users, change roles, view the Recycle Bin, and permanently restore deleted records.</li>
+            <li><span className="font-bold">Admin:</span> Day-to-day managers. Can approve requests, log new inventory, and add new items to the catalog.</li>
+            <li><span className="font-bold">Audit / Staff:</span> Read-only access. They can view current inventory levels and read old requests, but they cannot approve requests, buy items, or change settings.</li>
+          </ul>
+          <h3 className="font-bold text-lg mt-4 text-blue-800">Email Config:</h3>
+          <p>This is where you tell the system who to email when a new request is submitted, or when inventory drops below the Low Stock Threshold. You can enter multiple email addresses by separating them with a comma.</p>
+        </HelpModal>
+
         <div className="overflow-x-auto bg-white border border-slate-200 rounded-xl shadow-sm max-h-[600px] overflow-y-auto">
           <table className="w-full text-left text-sm">
             <thead className="bg-slate-50 text-slate-600 font-medium border-b border-slate-200 sticky top-0">
@@ -2307,6 +2152,7 @@ function SystemLogsSettingsView({ currentUser }: { currentUser: any }) {
           </p>
         </div>
       </div>
+    </div>
     </div>
   );
 }

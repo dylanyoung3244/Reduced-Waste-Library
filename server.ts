@@ -5,6 +5,7 @@ import nodemailer from 'nodemailer';
 import * as dotenv from 'dotenv';
 import multer from 'multer';
 import { Storage } from '@google-cloud/storage';
+import rateLimit from 'express-rate-limit';
 import { db, initDb, FieldValue } from './src/db.js';
 
 dotenv.config();
@@ -18,10 +19,21 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }
 });
 
+// Configure Rate Limiter for Public Requests (50 requests per IP per hour to account for shared building WANs)
+const requestSubmitLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, 
+  max: 50, 
+  message: { error: 'Too many requests submitted from this network. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 async function startServer() {
   const app = express();
   const PORT = parseInt(process.env.PORT || '3001');
 
+  // Trust the Google Cloud Run Proxy so the rate limiter reads the correct client IP
+  app.set('trust proxy', 1);
   app.use(express.json({ limit: '50mb' }));
   initDb();
 
@@ -52,6 +64,51 @@ async function startServer() {
     } catch (e) { console.error("Audit log failed", e); }
   }
 
+  // --- RESTORE ROUTES (Super Admin Only) ---
+  app.put('/api/restore/requests/:id', requireSuperAdmin, async (req, res) => {
+    try {
+      await db.collection('requests').doc(req.params.id).update({ is_deleted: false });
+      await logAudit(req.headers['x-username'] as string, 'RESTORED_REQUEST', `Restored request ${req.params.id}`, { request_id: req.params.id });
+      res.json({ success: true });
+    } catch (error) { res.status(500).json({ error: String(error) }); }
+  });
+
+  app.put('/api/restore/items/:item_number', requireSuperAdmin, async (req, res) => {
+    try {
+      await db.collection('inventory').doc(req.params.item_number).update({ is_deleted: false });
+      await logAudit(req.headers['x-username'] as string, 'RESTORED_ITEM', `Restored catalog item ${req.params.item_number}`, { item_number: req.params.item_number });
+      res.json({ success: true });
+    } catch (error) { res.status(500).json({ error: String(error) }); }
+  });
+
+  app.put('/api/restore/orders/:order_number', requireSuperAdmin, async (req, res) => {
+    const { order_number } = req.params;
+    try {
+      const orderRef = db.collection('orders').doc(order_number);
+      const orderDoc = await orderRef.get();
+      if (!orderDoc.exists) return res.status(404).json({ error: 'Not found' });
+      const orderData = orderDoc.data() as any;
+
+      for (const line_item of orderData.line_items || []) {
+        const invSnap = await db.collection('inventory').where('item_number', '==', line_item.item_number).limit(1).get();
+        if (!invSnap.empty) {
+          const vItem = invSnap.docs[0].data();
+          for (const comp of vItem.kit_components || []) {
+            const added = line_item.quantity * (vItem.pack_size || 1) * (comp.yield_multiplier || 1);
+            await db.collection('categories').doc(String(comp.category_id)).update({ 
+              current_count: FieldValue.increment(added), 
+              total_procured: FieldValue.increment(added) 
+            });
+          }
+        }
+      }
+      await orderRef.update({ is_deleted: false });
+      await logAudit(req.headers['x-username'] as string, 'RESTORED_ORDER', `Restored order ${order_number} and re-applied math`, { order_number });
+      res.json({ success: true });
+    } catch (error) { res.status(500).json({ error: String(error) }); }
+  });
+
+  // --- EXPORTS & TEMPLATES ---
   app.get('/api/export/analytics', requireApiKey, async (req, res) => {
     try {
       const [invSnap, reqSnap, ordSnap] = await Promise.all([
@@ -59,7 +116,6 @@ async function startServer() {
         db.collection('requests').get(),
         db.collection('orders').get()
       ]);
-      
       res.json({
         inventory: invSnap.docs.map(d => ({ id: d.id, ...d.data() })),
         requests: reqSnap.docs.map(d => ({ id: d.id, ...d.data() })),
@@ -69,21 +125,8 @@ async function startServer() {
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  // --- BULK TEMPLATES ---
   app.get('/api/export/template/inventory', requireAdmin, (req, res) => {
     const template = "item_number,vendor,type,name,price,pack_size,reorder_url,kit_components\nSKU-123,Amazon,Reusable,Metal Fork,12.99,50,https://amazon.com/example,[]";
-    res.setHeader('Content-Type', 'text/csv');
-    res.send(template);
-  });
-
-  app.get('/api/export/template/orders', requireAdmin, (req, res) => {
-    const template = "order_number,order_name,date_ordered,date_delivered,subtotal,shipping,tax,total,procurement_method,logged_by,line_items\nWalmart-001,Walmart Bulk,2025-03-11,2025-03-12,100.00,0,0,100.00,Credit Card,Admin,\"[{\\\"item_number\\\":\\\"SKU-123\\\",\\\"quantity\\\":10,\\\"price\\\":10.00}]\"";
-    res.setHeader('Content-Type', 'text/csv');
-    res.send(template);
-  });
-
-  app.get('/api/export/template/requests', requireAdmin, (req, res) => {
-    const template = "requester_name,requester_email,requester_phone,department,event_name,check_out_date,check_in_date,status,line_items\nJohn Doe,jdoe@email.com,555-0100,Parks,Luau,2025-04-01,2025-04-05,Approved,\"[{\\\"item_number\\\":\\\"SKU-123\\\",\\\"quantity\\\":50}]\"";
     res.setHeader('Content-Type', 'text/csv');
     res.send(template);
   });
@@ -124,9 +167,7 @@ async function startServer() {
         const ref = db.collection('orders').doc(item.order_number);
         let parsedLineItems = [];
         try { parsedLineItems = typeof item.line_items === 'string' ? JSON.parse(item.line_items) : (item.line_items || []); } catch(e){}
-        batch.set(ref, {
-          ...item, line_items: parsedLineItems, is_deleted: false
-        }, { merge: true });
+        batch.set(ref, { ...item, line_items: parsedLineItems, is_deleted: false }, { merge: true });
       });
       await batch.commit();
       await logAudit(req.headers['x-username'] as string, 'BULK_UPLOAD', `Uploaded ${items.length} orders via CSV`, { count: items.length, target: 'orders' });
@@ -144,9 +185,7 @@ async function startServer() {
         const ref = item.id ? db.collection('requests').doc(item.id) : db.collection('requests').doc();
         let parsedLineItems = [];
         try { parsedLineItems = typeof item.line_items === 'string' ? JSON.parse(item.line_items) : (item.line_items || []); } catch(e){}
-        batch.set(ref, {
-          ...item, line_items: parsedLineItems, is_deleted: false, status: item.status || 'Awaiting'
-        }, { merge: true });
+        batch.set(ref, { ...item, line_items: parsedLineItems, is_deleted: false, status: item.status || 'Awaiting' }, { merge: true });
       });
       await batch.commit();
       await logAudit(req.headers['x-username'] as string, 'BULK_UPLOAD', `Uploaded ${items.length} requests via CSV`, { count: items.length, target: 'requests' });
@@ -169,6 +208,7 @@ async function startServer() {
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
+  // --- SETTINGS & AUDIT ---
   app.get('/api/settings', requireSuperAdmin, async (req, res) => {
     try {
       const doc = await db.collection('settings').doc('email_config').get();
@@ -191,6 +231,7 @@ async function startServer() {
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
+  // --- USERS ---
   app.get('/api/users', requireSuperAdmin, async (req, res) => {
     try {
       const snapshot = await db.collection('users').get();
@@ -241,8 +282,18 @@ async function startServer() {
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.post('/api/requests', async (req, res) => {
+  // --- REQUESTS (With Security Whitelist & Rate Limiter) ---
+  app.post('/api/requests', requestSubmitLimiter, async (req, res) => {
     const { requester_name, requester_email, requester_phone, department, event_name, check_out_date, check_in_date, line_items } = req.body;
+    
+    // Domain Whitelist Security Check
+    const allowedDomains = ['@hawaiicounty.gov', '@hawaii.gov', '@hawaiipolice.gov', '@hawaiiprosecutors.gov'];
+    const isAllowed = allowedDomains.some(domain => requester_email?.toLowerCase().endsWith(domain));
+    
+    if (!isAllowed) {
+      return res.status(403).json({ error: 'Forbidden: Only official government emails are permitted.' });
+    }
+
     try {
       const docRef = await db.collection('requests').add({
         requester_name, requester_email, requester_phone, department, event_name, check_out_date, check_in_date, status: 'Awaiting', is_deleted: false, line_items: line_items.filter((item: any) => item.quantity > 0)
@@ -286,7 +337,6 @@ async function startServer() {
       
       const requestData = reqDoc.data() as any;
       const oldStatus = requestData.status;
-      
       const settingsDoc = await db.collection('settings').doc('email_config').get();
       const settings = settingsDoc.data() || {};
       
@@ -348,6 +398,7 @@ async function startServer() {
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
+  // --- ORDERS (Admin Only) ---
   app.post('/api/orders', requireAdmin, async (req, res) => {
     const { order_number, line_items, receipt_url } = req.body;
     try {
@@ -400,6 +451,7 @@ async function startServer() {
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
+  // --- INVENTORY & CATEGORIES ---
   app.post('/api/items', requireAdmin, async (req, res) => {
     try {
       await db.collection('inventory').doc(req.body.item_number).set({ ...req.body, is_deleted: false, current_count: 0, total_procured: 0, total_checked_out: 0 });
@@ -463,51 +515,6 @@ async function startServer() {
       const snapshot = await db.collection('inventory').get();
       const rows = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       res.json(rows);
-    } catch (error) { res.status(500).json({ error: String(error) }); }
-  });
-
-  // --- RESTORE ROUTES (Super Admin Only) ---
-  app.put('/api/restore/requests/:id', requireSuperAdmin, async (req, res) => {
-    try {
-      await db.collection('requests').doc(req.params.id).update({ is_deleted: false });
-      await logAudit(req.headers['x-username'] as string, 'RESTORED_REQUEST', `Restored request ${req.params.id}`, { request_id: req.params.id });
-      res.json({ success: true });
-    } catch (error) { res.status(500).json({ error: String(error) }); }
-  });
-
-  app.put('/api/restore/items/:item_number', requireSuperAdmin, async (req, res) => {
-    try {
-      await db.collection('inventory').doc(req.params.item_number).update({ is_deleted: false });
-      await logAudit(req.headers['x-username'] as string, 'RESTORED_ITEM', `Restored catalog item ${req.params.item_number}`, { item_number: req.params.item_number });
-      res.json({ success: true });
-    } catch (error) { res.status(500).json({ error: String(error) }); }
-  });
-
-  app.put('/api/restore/orders/:order_number', requireSuperAdmin, async (req, res) => {
-    const { order_number } = req.params;
-    try {
-      const orderRef = db.collection('orders').doc(order_number);
-      const orderDoc = await orderRef.get();
-      if (!orderDoc.exists) return res.status(404).json({ error: 'Not found' });
-      const orderData = orderDoc.data() as any;
-
-      // Re-apply the math for the restored procurement order
-      for (const line_item of orderData.line_items || []) {
-        const invSnap = await db.collection('inventory').where('item_number', '==', line_item.item_number).limit(1).get();
-        if (!invSnap.empty) {
-          const vItem = invSnap.docs[0].data();
-          for (const comp of vItem.kit_components || []) {
-            const added = line_item.quantity * (vItem.pack_size || 1) * (comp.yield_multiplier || 1);
-            await db.collection('categories').doc(String(comp.category_id)).update({ 
-              current_count: FieldValue.increment(added), 
-              total_procured: FieldValue.increment(added) 
-            });
-          }
-        }
-      }
-      await orderRef.update({ is_deleted: false });
-      await logAudit(req.headers['x-username'] as string, 'RESTORED_ORDER', `Restored order ${order_number} and re-applied math`, { order_number });
-      res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 

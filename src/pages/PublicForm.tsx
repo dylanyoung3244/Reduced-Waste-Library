@@ -4,7 +4,7 @@ import { cn } from '../lib/utils';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
 
 const hawaiiCountyDepartments = [
-  "Animal Control and Rescue Agency",
+  "Animal Control and Protection Agency",
   "Civil Defense Agency",
   "Corporation Counsel",
   "County Council",
@@ -14,12 +14,12 @@ const hawaiiCountyDepartments = [
   "Department of Information Technology",
   "Department of Liquor Control",
   "Department of Parks and Recreation",
+  "Department of Planning",
   "Department of Public Works",
   "Department of Research and Development",
   "Department of Water Supply",
   "Elections Division",
-  "Hawaiʻi Fire Department",
-  "Hawaiʻi Police Department",
+  "Fire Department",
   "Mass Transit Agency",
   "Mayor's Office",
   "Office of Aging",
@@ -28,7 +28,18 @@ const hawaiiCountyDepartments = [
   "Office of the County Auditor",
   "Office of the County Clerk",
   "Office of the Prosecuting Attorney",
-  "Planning Department"
+  "Police Department"
+];
+
+const sortOrder = [
+  "Compostable Napkins",
+  "Compostable Chopsticks",
+  "Compostable Forks",
+  "Compostable Spoons",
+  "Compostable Knives",
+  "Reusable (Aluminum) Cups",
+  "Reusable (Aluminum) Plates",
+  "Reusable Water Jugs"
 ];
 
 export function PublicForm() {
@@ -52,7 +63,6 @@ export function PublicForm() {
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [setsRequested, setSetsRequested] = useState(0);
 
-  // Map category names to their yield in a single 25-person set
   const setYields: Record<string, number> = {
     'Compostable Plates': 25,
     'Reusable Cups': 25,
@@ -76,11 +86,30 @@ export function PublicForm() {
       });
   }, []);
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value, type, checked } = e.target;
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value, type } = e.target;
+    
+    // Checkbox handling
+    let parsedValue: string | boolean = value;
+    if (type === 'checkbox') {
+      parsedValue = (e.target as HTMLInputElement).checked;
+    }
+
+    // Weekend Blocker Logic
+    if (name === 'check_out_date' || name === 'check_in_date') {
+      const selectedDate = new Date(value);
+      const day = selectedDate.getUTCDay();
+      if (day === 0 || day === 6) {
+        setError('Check-out and check-in dates cannot fall on a weekend.');
+        return; 
+      } else {
+        setError(''); 
+      }
+    }
+
     setFormData(prev => ({
       ...prev,
-      [name]: type === 'checkbox' ? checked : value
+      [name]: parsedValue
     }));
   };
 
@@ -91,7 +120,6 @@ export function PublicForm() {
       return;
     }
     
-    // Enforce interval of 10 unless it's a water jug
     const isJug = categoryName === 'Reusable Water Jugs';
     if (!isJug) {
       num = Math.round(num / 10) * 10;
@@ -118,6 +146,16 @@ export function PublicForm() {
       return;
     }
 
+    // Frontend Email Whitelist Check
+    const email = formData.requester_email.toLowerCase();
+    if (!email.endsWith('@hawaiicounty.gov') && 
+        !email.endsWith('@hawaii.gov') && 
+        !email.endsWith('@hawaiipolice.gov') && 
+        !email.endsWith('@hawaiiprosecutors.gov')) {
+      setError('Forbidden: Only official government emails (@hawaiicounty.gov, @hawaii.gov, @hawaiipolice.gov, @hawaiiprosecutors.gov) are allowed.');
+      return;
+    }
+
     const line_items = inventory
       .map(item => ({
         category_id: item.id,
@@ -131,11 +169,11 @@ export function PublicForm() {
       return;
     }
 
-    // Check if total requested exceeds available inventory
     const exceededItems = inventory.filter(item => {
       const currentCount = item.current_count ?? item.count ?? 0;
       return getTotalQuantity(item) > currentCount;
     });
+    
     if (exceededItems.length > 0) {
       setError(`Requested quantity exceeds available inventory for: ${exceededItems.map(i => i.name || 'Unknown').join(', ')}`);
       return;
@@ -154,7 +192,11 @@ export function PublicForm() {
         })
       });
 
-      if (!res.ok) throw new Error('Failed to submit request');
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        setError(data.error || 'Failed to submit request.');
+        return;
+      }
       
       setSuccess(true);
       setFormData({
@@ -186,7 +228,8 @@ export function PublicForm() {
       <div className="max-w-2xl mx-auto bg-white p-8 rounded-2xl shadow-sm border border-slate-200 text-center">
         <CheckCircle2 className="h-16 w-16 text-emerald-500 mx-auto mb-4" />
         <h2 className="text-2xl font-semibold text-slate-900 mb-2">Request Submitted!</h2>
-        <p className="text-slate-600 mb-6">Your request has been received and is awaiting staff approval.</p>
+        <p className="text-slate-600 mb-2">Your request has been received and is awaiting staff approval.</p>
+        <p className="text-emerald-700 font-medium mb-6">We will confirm with you within 2 business days. Thank you for using the Reuse Library!</p>
         <button 
           onClick={() => setSuccess(false)}
           className="bg-emerald-600 text-white px-6 py-2 rounded-xl font-medium hover:bg-emerald-700 transition-colors"
@@ -196,6 +239,17 @@ export function PublicForm() {
       </div>
     );
   }
+
+  // Sort inventory based on Kendra's custom order
+  const sortedInventory = [...inventory].sort((a, b) => {
+    const aName = a.name || '';
+    const bName = b.name || '';
+    const aIndex = sortOrder.indexOf(aName);
+    const bIndex = sortOrder.indexOf(bName);
+    const aVal = aIndex === -1 ? 999 : aIndex;
+    const bVal = bIndex === -1 ? 999 : bIndex;
+    return aVal - bVal;
+  });
 
   return (
     <div className="max-w-3xl mx-auto">
@@ -258,7 +312,7 @@ export function PublicForm() {
                 required
                 name="department"
                 value={formData.department}
-                onChange={handleInputChange as any}
+                onChange={handleInputChange}
                 className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all bg-white"
               >
                 <option value="" disabled>Select a Department...</option>
@@ -312,7 +366,7 @@ export function PublicForm() {
               <div>
                 <h3 className="text-lg font-semibold text-emerald-900">25 Person Pre-Made Sets</h3>
                 <p className="text-sm text-emerald-700 mt-1">
-                  This set includes the following: 25 - Compostable Plates, 25 - Reusable (Aluminum) Cups, 25 - Compostable Forks, 25 - Compostable Knives, 25 - Compostable Spoons, ~50 - Compostable Napkins
+                  This set includes: 25 compostable plates, forks, knives, and spoons; 25 reusable (aluminum) cups, and ~50 compostable napkins.
                 </p>
               </div>
               <div className="shrink-0">
@@ -330,23 +384,32 @@ export function PublicForm() {
 
           <div className="space-y-4">
             <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">A La Carte Items (Intervals of 10)</h3>
-            {inventory.map((item) => {
+            {sortedInventory.map((item) => {
               const total = getTotalQuantity(item);
               const currentCount = item.current_count ?? item.count ?? 0;
               const categoryName = item.name || 'Unknown';
               const isExceeded = total > currentCount;
+              // Check if the item object has a photo_url or image_url from the DB
+              const imageUrl = (item as any).photo_url || (item as any).image_url;
 
               return (
                 <div key={item.id} className={`flex flex-col md:flex-row md:items-center justify-between p-4 rounded-xl border ${isExceeded ? 'border-red-200 bg-red-50' : 'border-slate-100 bg-slate-50/50 hover:bg-slate-50'} transition-colors gap-4`}>
-                  <div>
-                    <h3 className="font-medium text-slate-900">{categoryName}</h3>
-                    <p className="text-sm text-slate-500 mt-1">
-                      {currentCount > 0 ? (
-                        <span className="text-emerald-600 font-medium">{currentCount} available</span>
-                      ) : (
-                        <span className="text-red-500 font-medium">Out of stock</span>
-                      )}
-                    </p>
+                  <div className="flex items-center gap-4">
+                    {imageUrl && (
+                      <div className="shrink-0 hidden md:block">
+                        <img src={imageUrl} alt={categoryName} className="w-12 h-12 object-cover rounded shadow-sm border border-slate-200" />
+                      </div>
+                    )}
+                    <div>
+                      <h3 className="font-medium text-slate-900">{categoryName}</h3>
+                      <p className="text-sm text-slate-500 mt-1">
+                        {currentCount > 0 ? (
+                          <span className="text-emerald-600 font-medium">{currentCount} available</span>
+                        ) : (
+                          <span className="text-red-500 font-medium">Out of stock</span>
+                        )}
+                      </p>
+                    </div>
                   </div>
                   <div className="flex items-center gap-4">
                     <div className="text-right">

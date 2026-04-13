@@ -1,4 +1,5 @@
 import { Firestore, FieldValue } from '@google-cloud/firestore';
+import bcrypt from 'bcrypt';
 
 export const db = new Firestore();
 export { FieldValue };
@@ -7,6 +8,7 @@ export async function initDb() {
   const usersSnapshot = await db.collection('users').limit(1).get();
   
   if (usersSnapshot.empty) {
+    const saltRounds = 10;
     const users = [
       { username: 'dyoung', password: 'OSCER2026', full_name: 'Dylan Young', role: 'super_admin' },
       { username: 'kobermaier', password: 'OSCER2026', full_name: 'Kobermaier', role: 'admin' },
@@ -14,7 +16,10 @@ export async function initDb() {
       { username: 'Jrosas', password: 'OSCER2026', full_name: 'Jrosas', role: 'user' },
       { username: 'oscer', password: 'OSCER2026', full_name: 'OSCER', role: 'user' }
     ];
-    for (const user of users) await db.collection('users').add(user);
+    for (const user of users) {
+      const hashedPassword = await bcrypt.hash(user.password, saltRounds);
+      await db.collection('users').add({ ...user, password: hashedPassword });
+    }
   }
 
   const settingsSnapshot = await db.collection('settings').doc('email_config').get();
