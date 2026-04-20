@@ -6,9 +6,13 @@ import * as dotenv from 'dotenv';
 import multer from 'multer';
 import { Storage } from '@google-cloud/storage';
 import rateLimit from 'express-rate-limit';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 import { db, initDb, FieldValue } from './src/db.js';
 
 dotenv.config();
+
+const JWT_SECRET = process.env['JWT_SECRET'] || 'super-secret-key-change-me-in-production';
 
 const storage = new Storage();
 const bucketName = process.env['GCS_BUCKET_NAME'] || 'missing-bucket-name';
@@ -37,13 +41,26 @@ async function startServer() {
   app.use(express.json({ limit: '50mb' }));
   initDb();
 
-  const requireSuperAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    if (req.headers['x-user-role'] !== 'super_admin') return res.status(403).json({ error: 'Super Admin required' });
+  const authenticateToken = (req: any, res: express.Response, next: express.NextFunction) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) return res.status(401).json({ error: 'Access denied: No token provided' });
+
+    jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
+      if (err) return res.status(403).json({ error: 'Invalid or expired token' });
+      req.user = user;
+      next();
+    });
+  };
+
+  const requireSuperAdmin = (req: any, res: express.Response, next: express.NextFunction) => {
+    if (req.user?.role !== 'super_admin') return res.status(403).json({ error: 'Super Admin required' });
     next();
   };
   
-  const requireAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const role = req.headers['x-user-role'];
+  const requireAdmin = (req: any, res: express.Response, next: express.NextFunction) => {
+    const role = req.user?.role;
     if (role !== 'admin' && role !== 'super_admin') return res.status(403).json({ error: 'Admin required' });
     next();
   };
@@ -65,23 +82,23 @@ async function startServer() {
   }
 
   // --- RESTORE ROUTES (Super Admin Only) ---
-  app.put('/api/restore/requests/:id', requireSuperAdmin, async (req, res) => {
+  app.put('/api/restore/requests/:id', authenticateToken, requireSuperAdmin, async (req: any, res) => {
     try {
       await db.collection('requests').doc(req.params.id).update({ is_deleted: false });
-      await logAudit(req.headers['x-username'] as string, 'RESTORED_REQUEST', `Restored request ${req.params.id}`, { request_id: req.params.id });
+      await logAudit(req.user?.username, 'RESTORED_REQUEST', `Restored request ${req.params.id}`, { request_id: req.params.id });
       res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.put('/api/restore/items/:item_number', requireSuperAdmin, async (req, res) => {
+  app.put('/api/restore/items/:item_number', authenticateToken, requireSuperAdmin, async (req: any, res) => {
     try {
       await db.collection('inventory').doc(req.params.item_number).update({ is_deleted: false });
-      await logAudit(req.headers['x-username'] as string, 'RESTORED_ITEM', `Restored catalog item ${req.params.item_number}`, { item_number: req.params.item_number });
+      await logAudit(req.user?.username, 'RESTORED_ITEM', `Restored catalog item ${req.params.item_number}`, { item_number: req.params.item_number });
       res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.put('/api/restore/orders/:order_number', requireSuperAdmin, async (req, res) => {
+  app.put('/api/restore/orders/:order_number', authenticateToken, requireSuperAdmin, async (req: any, res) => {
     const { order_number } = req.params;
     try {
       const orderRef = db.collection('orders').doc(order_number);
@@ -103,7 +120,7 @@ async function startServer() {
         }
       }
       await orderRef.update({ is_deleted: false });
-      await logAudit(req.headers['x-username'] as string, 'RESTORED_ORDER', `Restored order ${order_number} and re-applied math`, { order_number });
+      await logAudit(req.user?.username, 'RESTORED_ORDER', `Restored order ${order_number} and re-applied math`, { order_number });
       res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
@@ -125,14 +142,14 @@ async function startServer() {
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.get('/api/export/template/inventory', requireAdmin, (req, res) => {
+  app.get('/api/export/template/inventory', authenticateToken, requireAdmin, (req, res) => {
     const template = "item_number,vendor,type,name,price,pack_size,reorder_url,kit_components\nSKU-123,Amazon,Reusable,Metal Fork,12.99,50,https://amazon.com/example,[]";
     res.setHeader('Content-Type', 'text/csv');
     res.send(template);
   });
 
   // --- BULK UPLOADS ---
-  app.post('/api/bulk-upload/inventory', requireAdmin, async (req, res) => {
+  app.post('/api/bulk-upload/inventory', authenticateToken, requireAdmin, async (req: any, res) => {
     const { items } = req.body;
     if (!items || !Array.isArray(items)) return res.status(400).json({ error: 'Invalid payload' });
 
@@ -151,12 +168,12 @@ async function startServer() {
         }, { merge: true });
       });
       await batch.commit();
-      await logAudit(req.headers['x-username'] as string, 'BULK_UPLOAD', `Uploaded ${items.length} catalog items via CSV`, { count: items.length, target: 'inventory' });
+      await logAudit(req.user?.username, 'BULK_UPLOAD', `Uploaded ${items.length} catalog items via CSV`, { count: items.length, target: 'inventory' });
       res.json({ success: true, count: items.length });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.post('/api/bulk-upload/orders', requireAdmin, async (req, res) => {
+  app.post('/api/bulk-upload/orders', authenticateToken, requireAdmin, async (req: any, res) => {
     const { items } = req.body;
     if (!items || !Array.isArray(items)) return res.status(400).json({ error: 'Invalid payload' });
 
@@ -170,12 +187,12 @@ async function startServer() {
         batch.set(ref, { ...item, line_items: parsedLineItems, is_deleted: false }, { merge: true });
       });
       await batch.commit();
-      await logAudit(req.headers['x-username'] as string, 'BULK_UPLOAD', `Uploaded ${items.length} orders via CSV`, { count: items.length, target: 'orders' });
+      await logAudit(req.user?.username, 'BULK_UPLOAD', `Uploaded ${items.length} orders via CSV`, { count: items.length, target: 'orders' });
       res.json({ success: true, count: items.length });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.post('/api/bulk-upload/requests', requireAdmin, async (req, res) => {
+  app.post('/api/bulk-upload/requests', authenticateToken, requireAdmin, async (req: any, res) => {
     const { items } = req.body;
     if (!items || !Array.isArray(items)) return res.status(400).json({ error: 'Invalid payload' });
 
@@ -188,12 +205,12 @@ async function startServer() {
         batch.set(ref, { ...item, line_items: parsedLineItems, is_deleted: false, status: item.status || 'Awaiting' }, { merge: true });
       });
       await batch.commit();
-      await logAudit(req.headers['x-username'] as string, 'BULK_UPLOAD', `Uploaded ${items.length} requests via CSV`, { count: items.length, target: 'requests' });
+      await logAudit(req.user?.username, 'BULK_UPLOAD', `Uploaded ${items.length} requests via CSV`, { count: items.length, target: 'requests' });
       res.json({ success: true, count: items.length });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.post('/api/upload-receipt', requireAdmin, upload.single('receipt'), async (req, res) => {
+  app.post('/api/upload-receipt', authenticateToken, requireAdmin, upload.single('receipt'), async (req: any, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
     try {
       const blob = bucket.file(`receipts/${Date.now()}-${req.file.originalname}`);
@@ -201,7 +218,7 @@ async function startServer() {
       blobStream.on('error', (err) => res.status(500).json({ error: err.message }));
       blobStream.on('finish', async () => {
         const publicUrl = `https://storage.googleapis.com/${bucketName}/${blob.name}`;
-        await logAudit(req.headers['x-username'] as string, 'UPLOADED_RECEIPT', `Uploaded receipt file`, { filename: req.file?.originalname, url: publicUrl });
+        await logAudit(req.user?.username, 'UPLOADED_RECEIPT', `Uploaded receipt file`, { filename: req.file?.originalname, url: publicUrl });
         res.json({ success: true, url: publicUrl });
       });
       blobStream.end(req.file.buffer);
@@ -209,22 +226,22 @@ async function startServer() {
   });
 
   // --- SETTINGS & AUDIT ---
-  app.get('/api/settings', requireSuperAdmin, async (req, res) => {
+  app.get('/api/settings', authenticateToken, requireSuperAdmin, async (req, res) => {
     try {
       const doc = await db.collection('settings').doc('email_config').get();
       res.json(doc.data());
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.put('/api/settings', requireSuperAdmin, async (req, res) => {
+  app.put('/api/settings', authenticateToken, requireSuperAdmin, async (req: any, res) => {
     try {
       await db.collection('settings').doc('email_config').update(req.body);
-      await logAudit(req.headers['x-username'] as string, 'UPDATED_SETTINGS', `Updated email config`, req.body);
+      await logAudit(req.user?.username, 'UPDATED_SETTINGS', `Updated email config`, req.body);
       res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.get('/api/audit_logs', requireSuperAdmin, async (req, res) => {
+  app.get('/api/audit_logs', authenticateToken, requireSuperAdmin, async (req, res) => {
     try {
       const snapshot = await db.collection('audit_logs').orderBy('timestamp', 'desc').limit(500).get();
       res.json(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -232,39 +249,42 @@ async function startServer() {
   });
 
   // --- USERS ---
-  app.get('/api/users', requireSuperAdmin, async (req, res) => {
+  app.get('/api/users', authenticateToken, requireSuperAdmin, async (req, res) => {
     try {
       const snapshot = await db.collection('users').get();
       res.json(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.post('/api/users', requireAdmin, async (req, res) => {
+  app.post('/api/users', authenticateToken, requireAdmin, async (req: any, res) => {
     const { username, password, full_name, role } = req.body;
     try {
-      await db.collection('users').add({ username, password, full_name, role: role || 'staff' });
-      await logAudit(req.headers['x-username'] as string, 'CREATED_USER', `Created user ${username}`, { role: role || 'staff' });
+      const hashedPassword = await bcrypt.hash(password, 10);
+      await db.collection('users').add({ username, password: hashedPassword, full_name, role: role || 'staff' });
+      await logAudit(req.user?.username, 'CREATED_USER', `Created user ${username}`, { role: role || 'staff' });
       res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.put('/api/users/:id', requireAdmin, async (req, res) => {
+  app.put('/api/users/:id', authenticateToken, requireAdmin, async (req: any, res) => {
     const { id } = req.params;
     const { username, full_name, password, role } = req.body;
     try {
       const updateData: any = { username, full_name, role };
-      if (password) updateData.password = password;
+      if (password) {
+        updateData.password = await bcrypt.hash(password, 10);
+      }
       await db.collection('users').doc(id).update(updateData);
-      await logAudit(req.headers['x-username'] as string, 'UPDATED_USER', `Updated user ${username}`, { target_user_id: id, new_role: role });
+      await logAudit(req.user?.username, 'UPDATED_USER', `Updated user ${username}`, { target_user_id: id, new_role: role });
       res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.delete('/api/users/:id', requireAdmin, async (req, res) => {
+  app.delete('/api/users/:id', authenticateToken, requireAdmin, async (req: any, res) => {
     const { id } = req.params;
     try {
       await db.collection('users').doc(id).delete();
-      await logAudit(req.headers['x-username'] as string, 'DELETED_USER', `Deleted user record`, { target_user_id: id });
+      await logAudit(req.user?.username, 'DELETED_USER', `Deleted user record`, { target_user_id: id });
       res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
@@ -272,10 +292,22 @@ async function startServer() {
   app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     try {
-      const snapshot = await db.collection('users').where('username', '==', username).where('password', '==', password).limit(1).get();
+      const snapshot = await db.collection('users').where('username', '==', username).limit(1).get();
       if (!snapshot.empty) {
-        const user = snapshot.docs[0].data();
-        res.json({ token: "authenticated", user: { username: user.username, full_name: user.full_name, role: user.role } });
+        const userDoc = snapshot.docs[0];
+        const user = userDoc.data();
+        
+        const isPasswordValid = await bcrypt.compare(password, user.password);
+        if (isPasswordValid) {
+          const token = jwt.sign(
+            { id: userDoc.id, username: user.username, role: user.role },
+            JWT_SECRET,
+            { expiresIn: '8h' }
+          );
+          res.json({ token, user: { username: user.username, full_name: user.full_name, role: user.role } });
+        } else {
+          res.status(401).json({ error: 'Invalid credentials' });
+        }
       } else {
         res.status(401).json({ error: 'Invalid credentials' });
       }
@@ -283,25 +315,32 @@ async function startServer() {
   });
 
   // --- REQUESTS (With Security Whitelist & Rate Limiter) ---
+  app.get('/api/allowed-domains', async (req, res) => {
+    try {
+      const doc = await db.collection('settings').doc('email_config').get();
+      const data = doc.data();
+      res.json({ allowed_domains: data?.allowed_domains || ['@hawaiicounty.gov', '@hawaii.gov', '@hawaiipolice.gov', '@hawaiiprosecutors.gov'] });
+    } catch (error) { res.status(500).json({ error: String(error) }); }
+  });
+
   app.post('/api/requests', requestSubmitLimiter, async (req, res) => {
     const { requester_name, requester_email, requester_phone, department, event_name, check_out_date, check_in_date, line_items } = req.body;
     
-    // Domain Whitelist Security Check
-    const allowedDomains = ['@hawaiicounty.gov', '@hawaii.gov', '@hawaiipolice.gov', '@hawaiiprosecutors.gov'];
-    const isAllowed = allowedDomains.some(domain => requester_email?.toLowerCase().endsWith(domain));
-    
-    if (!isAllowed) {
-      return res.status(403).json({ error: 'Forbidden: Only official government emails are permitted.' });
-    }
-
     try {
+      // Domain Whitelist Security Check
+      const settingsDoc = await db.collection('settings').doc('email_config').get();
+      const settings = settingsDoc.data() || {};
+      const allowedDomains = settings.allowed_domains || ['@hawaiicounty.gov', '@hawaii.gov', '@hawaiipolice.gov', '@hawaiiprosecutors.gov'];
+      const isAllowed = allowedDomains.some((domain: string) => requester_email?.toLowerCase().endsWith(domain));
+      
+      if (!isAllowed) {
+        return res.status(403).json({ error: 'Invalid email domain. Please use an approved county email address.' });
+      }
+
       const docRef = await db.collection('requests').add({
         requester_name, requester_email, requester_phone, department, event_name, check_out_date, check_in_date, status: 'Awaiting', is_deleted: false, line_items: line_items.filter((item: any) => item.quantity > 0)
       });
       await logAudit(requester_name, 'CREATED_REQUEST', `Submitted request for ${event_name}`, { request_id: docRef.id, department });
-      
-      const settingsDoc = await db.collection('settings').doc('email_config').get();
-      const settings = settingsDoc.data() || {};
       
       if (process.env['SMTP_USER'] && process.env['SMTP_PASS']) {
         const transporter = nodemailer.createTransport({ host: process.env['SMTP_HOST'] || 'smtp.gmail.com', port: parseInt(process.env['SMTP_PORT'] || '587'), secure: process.env['SMTP_SECURE'] === 'true', auth: { user: process.env['SMTP_USER'], pass: process.env['SMTP_PASS'] } });
@@ -318,17 +357,29 @@ async function startServer() {
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.get('/api/requests', async (req, res) => {
-    const role = req.headers['x-user-role'];
+  app.get('/api/requests', authenticateToken, async (req: any, res) => {
+    const role = req.user?.role;
+    const limit = parseInt(req.query.limit as string) || 50;
+    const startAfterId = req.query.startAfter as string;
+
     try {
       let query: any = db.collection('requests');
       if (role !== 'super_admin') query = query.where('is_deleted', '==', false);
-      const snapshot = await query.orderBy('check_out_date', 'asc').get();
+      query = query.orderBy('check_out_date', 'asc');
+
+      if (startAfterId) {
+        const startAfterDoc = await db.collection('requests').doc(startAfterId).get();
+        if (startAfterDoc.exists) {
+          query = query.startAfter(startAfterDoc);
+        }
+      }
+
+      const snapshot = await query.limit(limit).get();
       res.json(snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() })));
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.put('/api/requests/:id/status', async (req, res) => {
+  app.put('/api/requests/:id/status', authenticateToken, async (req: any, res) => {
     const { status: newStatus, handled_by } = req.body;
     const { id } = req.params;
     try {
@@ -373,33 +424,33 @@ async function startServer() {
         }
       }
       await db.collection('requests').doc(id).update({ status: newStatus, handled_by });
-      await logAudit(handled_by || req.headers['x-username'] as string, 'UPDATED_REQUEST_STATUS', `Changed request ${id} to ${newStatus}`, { request_id: id, old_status: oldStatus, new_status: newStatus });
+      await logAudit(handled_by || req.user?.username, 'UPDATED_REQUEST_STATUS', `Changed request ${id} to ${newStatus}`, { request_id: id, old_status: oldStatus, new_status: newStatus });
       res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.delete('/api/requests/:id', async (req, res) => {
+  app.delete('/api/requests/:id', authenticateToken, async (req: any, res) => {
     try {
       await db.collection('requests').doc(req.params.id).update({ is_deleted: true });
-      await logAudit(req.headers['x-username'] as string, 'DELETED_REQUEST', `Soft deleted request ${req.params.id}`, { request_id: req.params.id });
+      await logAudit(req.user?.username, 'DELETED_REQUEST', `Soft deleted request ${req.params.id}`, { request_id: req.params.id });
       res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.put('/api/requests/:id', async (req, res) => {
+  app.put('/api/requests/:id', authenticateToken, async (req: any, res) => {
     const { id } = req.params;
     const { requester_name, requester_email, requester_phone, department, event_name, check_out_date, check_in_date, status, line_items } = req.body;
     try {
       await db.collection('requests').doc(id).update({
         requester_name, requester_email, requester_phone, department, event_name, check_out_date, check_in_date, status, line_items: line_items || []
       });
-      await logAudit(req.headers['x-username'] as string, 'EDITED_REQUEST', `Edited raw request data for ${id}`, { request_id: id });
+      await logAudit(req.user?.username, 'EDITED_REQUEST', `Edited raw request data for ${id}`, { request_id: id });
       res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
   // --- ORDERS (Admin Only) ---
-  app.post('/api/orders', requireAdmin, async (req, res) => {
+  app.post('/api/orders', authenticateToken, requireAdmin, async (req: any, res) => {
     const { order_number, line_items, receipt_url } = req.body;
     try {
       await db.collection('orders').doc(order_number).set({ ...req.body, is_deleted: false, line_items: line_items || [], receipt_url: receipt_url || null });
@@ -413,21 +464,33 @@ async function startServer() {
           }
         }
       }
-      await logAudit(req.headers['x-username'] as string, 'CREATED_ORDER', `Logged procurement ${order_number}`, { order_number, item_count: line_items?.length || 0 });
+      await logAudit(req.user?.username, 'CREATED_ORDER', `Logged procurement ${order_number}`, { order_number, item_count: line_items?.length || 0 });
       res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.get('/api/orders', async (req, res) => {
+  app.get('/api/orders', authenticateToken, async (req: any, res) => {
+    const limit = parseInt(req.query.limit as string) || 50;
+    const startAfterId = req.query.startAfter as string;
+
     try {
       let query: any = db.collection('orders');
-      if (req.headers['x-user-role'] !== 'super_admin') query = query.where('is_deleted', '==', false);
-      const snapshot = await query.orderBy('date_ordered', 'desc').get();
+      if (req.user?.role !== 'super_admin') query = query.where('is_deleted', '==', false);
+      query = query.orderBy('date_ordered', 'desc');
+
+      if (startAfterId) {
+        const startAfterDoc = await db.collection('orders').doc(startAfterId).get();
+        if (startAfterDoc.exists) {
+          query = query.startAfter(startAfterDoc);
+        }
+      }
+
+      const snapshot = await query.limit(limit).get();
       res.json(snapshot.docs.map((doc:any) => ({ id: doc.id, ...doc.data() })));
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.delete('/api/orders/:order_number', requireAdmin, async (req, res) => {
+  app.delete('/api/orders/:order_number', authenticateToken, requireAdmin, async (req: any, res) => {
     const { order_number } = req.params;
     try {
       const orderRef = db.collection('orders').doc(order_number);
@@ -446,48 +509,48 @@ async function startServer() {
         }
       }
       await orderRef.update({ is_deleted: true });
-      await logAudit(req.headers['x-username'] as string, 'DELETED_ORDER', `Soft deleted order ${order_number} and reversed math`, { order_number });
+      await logAudit(req.user?.username, 'DELETED_ORDER', `Soft deleted order ${order_number} and reversed math`, { order_number });
       res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
   // --- INVENTORY & CATEGORIES ---
-  app.post('/api/items', requireAdmin, async (req, res) => {
+  app.post('/api/items', authenticateToken, requireAdmin, async (req: any, res) => {
     try {
       await db.collection('inventory').doc(req.body.item_number).set({ ...req.body, is_deleted: false, current_count: 0, total_procured: 0, total_checked_out: 0 });
-      await logAudit(req.headers['x-username'] as string, 'CREATED_ITEM', `Added item ${req.body.item_number}`, { item_number: req.body.item_number, vendor: req.body.vendor });
+      await logAudit(req.user?.username, 'CREATED_ITEM', `Added item ${req.body.item_number}`, { item_number: req.body.item_number, vendor: req.body.vendor });
       res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.put('/api/items/:item_number', requireAdmin, async (req, res) => {
+  app.put('/api/items/:item_number', authenticateToken, requireAdmin, async (req: any, res) => {
     const { item_number } = req.params;
     const { vendor, type, name, price, pack_size, kit_components, reorder_url } = req.body;
     try {
       await db.collection('inventory').doc(item_number).update({
         vendor, type, name, price, pack_size, reorder_url: reorder_url || '', kit_components: kit_components || []
       });
-      await logAudit(req.headers['x-username'] as string, 'EDITED_ITEM', `Edited catalog item ${item_number}`, { item_number });
+      await logAudit(req.user?.username, 'EDITED_ITEM', `Edited catalog item ${item_number}`, { item_number });
       res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.delete('/api/items/:item_number', requireAdmin, async (req, res) => {
+  app.delete('/api/items/:item_number', authenticateToken, requireAdmin, async (req: any, res) => {
     try {
       await db.collection('inventory').doc(req.params.item_number).update({ is_deleted: true });
-      await logAudit(req.headers['x-username'] as string, 'DELETED_ITEM', `Soft deleted catalog item ${req.params.item_number}`, { item_number: req.params.item_number });
+      await logAudit(req.user?.username, 'DELETED_ITEM', `Soft deleted catalog item ${req.params.item_number}`, { item_number: req.params.item_number });
       res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.put('/api/categories/:id', requireAdmin, async (req, res) => {
+  app.put('/api/categories/:id', authenticateToken, requireAdmin, async (req: any, res) => {
     const { id } = req.params;
     const { low_stock_threshold } = req.body;
     try {
       await db.collection('categories').doc(id).update({
         low_stock_threshold: parseInt(low_stock_threshold) || 100
       });
-      await logAudit(req.headers['x-username'] as string, 'UPDATED_THRESHOLD', `Updated threshold for category ${id}`, { category_id: id, new_threshold: low_stock_threshold });
+      await logAudit(req.user?.username, 'UPDATED_THRESHOLD', `Updated threshold for category ${id}`, { category_id: id, new_threshold: low_stock_threshold });
       res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
@@ -495,22 +558,21 @@ async function startServer() {
   app.get('/api/categories', async (req, res) => {
     try {
       let query: any = db.collection('categories').where('is_requestable', '==', 1);
-      if (req.headers['x-user-role'] !== 'super_admin') query = query.where('is_deleted', '==', false);
-      const snapshot = await query.get();
+      const snapshot = await query.where('is_deleted', '==', false).get();
       res.json(snapshot.docs.map((doc:any) => ({ id: doc.id, ...doc.data() })));
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.get('/api/items', async (req, res) => {
+  app.get('/api/items', authenticateToken, async (req: any, res) => {
     try {
       let query: any = db.collection('inventory');
-      if (req.headers['x-user-role'] !== 'super_admin') query = query.where('is_deleted', '==', false);
+      if (req.user?.role !== 'super_admin') query = query.where('is_deleted', '==', false);
       const snapshot = await query.get();
       res.json(snapshot.docs.map((doc:any) => ({ id: doc.id, ...doc.data() })));
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.get('/api/inventory/current', async (req, res) => {
+  app.get('/api/inventory/current', authenticateToken, async (req, res) => {
     try {
       const snapshot = await db.collection('inventory').get();
       const rows = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));

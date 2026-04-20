@@ -62,6 +62,7 @@ export function PublicForm() {
 
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [setsRequested, setSetsRequested] = useState(0);
+  const [allowedDomains, setAllowedDomains] = useState<string[]>([]);
 
   const setYields: Record<string, number> = {
     'Compostable Plates': 25,
@@ -73,6 +74,11 @@ export function PublicForm() {
   };
 
   useEffect(() => {
+    fetch('/api/allowed-domains')
+      .then(res => res.json())
+      .then(data => setAllowedDomains(data.allowed_domains || []))
+      .catch(err => console.error('Failed to load allowed domains', err));
+
     fetch('/api/categories')
       .then(res => res.json())
       .then(data => {
@@ -148,11 +154,11 @@ export function PublicForm() {
 
     // Frontend Email Whitelist Check
     const email = formData.requester_email.toLowerCase();
-    if (!email.endsWith('@hawaiicounty.gov') && 
-        !email.endsWith('@hawaii.gov') && 
-        !email.endsWith('@hawaiipolice.gov') && 
-        !email.endsWith('@hawaiiprosecutors.gov')) {
-      setError('Forbidden: Only official government emails (@hawaiicounty.gov, @hawaii.gov, @hawaiipolice.gov, @hawaiiprosecutors.gov) are allowed.');
+    const domainsToCheck = allowedDomains.length > 0 ? allowedDomains : ['@hawaiicounty.gov', '@hawaii.gov', '@hawaiipolice.gov', '@hawaiiprosecutors.gov'];
+    const isAllowed = domainsToCheck.some(domain => email.endsWith(domain.toLowerCase()));
+
+    if (!isAllowed) {
+      setError('Invalid email domain. Please use an approved county email address.');
       return;
     }
 
@@ -229,7 +235,7 @@ export function PublicForm() {
         <CheckCircle2 className="h-16 w-16 text-emerald-500 mx-auto mb-4" />
         <h2 className="text-2xl font-semibold text-slate-900 mb-2">Request Submitted!</h2>
         <p className="text-slate-600 mb-2">Your request has been received and is awaiting staff approval.</p>
-        <p className="text-emerald-700 font-medium mb-6">We will confirm with you within 2 business days. Thank you for using the Reuse Library!</p>
+        <p className="text-emerald-700 font-medium mb-6">We will confirm with you within 2 business days. Thank you for using the Reduced Waste Library!</p>
         <button 
           onClick={() => setSuccess(false)}
           className="bg-emerald-600 text-white px-6 py-2 rounded-xl font-medium hover:bg-emerald-700 transition-colors"
@@ -283,7 +289,7 @@ export function PublicForm() {
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">Email Address</label>
+              <label className="text-sm font-medium text-slate-700">County Email Address</label>
               <input 
                 required
                 type="email" 
@@ -457,6 +463,13 @@ export function PublicForm() {
             </span>
           </label>
         </div>
+
+        {error && (
+          <div className="p-4 bg-red-50 text-red-700 rounded-xl flex items-start gap-3 border border-red-100">
+            <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+            <p>{error}</p>
+          </div>
+        )}
 
         <div className="flex justify-end">
           <button

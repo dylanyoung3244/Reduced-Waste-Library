@@ -41,9 +41,18 @@ export function StaffDashboard() {
   const [editingOrder, setEditingOrder] = useState<any>(null);
   const [showDeleted, setShowDeleted] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(() => {
-    const saved = sessionStorage.getItem('user');
+    const saved = localStorage.getItem('user');
     return saved ? JSON.parse(saved) : null;
   });
+
+  const fetchWithAuth = async (url: string, options: any = {}) => {
+    const headers = {
+      ...options.headers,
+      'Authorization': `Bearer ${currentUser?.token}`,
+      'Content-Type': 'application/json'
+    };
+    return fetch(url, { ...options, headers });
+  };
 
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   const [loginError, setLoginError] = useState('');
@@ -59,8 +68,9 @@ export function StaffDashboard() {
       });
       const data = await res.json();
       if (res.ok) {
-        setCurrentUser(data.user);
-        sessionStorage.setItem('user', JSON.stringify(data.user));
+        const userWithToken = { ...data.user, token: data.token };
+        setCurrentUser(userWithToken);
+        localStorage.setItem('user', JSON.stringify(userWithToken));
       } else {
         setLoginError(data.error || 'Login failed');
       }
@@ -71,7 +81,7 @@ export function StaffDashboard() {
 
   const handleLogout = () => {
     setCurrentUser(null);
-    sessionStorage.removeItem('user');
+    localStorage.removeItem('user');
   };
 
   if (!currentUser) {
@@ -150,16 +160,16 @@ export function StaffDashboard() {
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 min-h-[500px]">
-        {activeTab === 'inventory' && <InventoryView currentUser={currentUser} />}
-        {activeTab === 'requests' && <RequestsView currentUser={currentUser} showDeleted={showDeleted} />}
-        {activeTab === 'procurement' && <ProcurementView currentUser={currentUser} editOrder={editingOrder} onComplete={() => { setActiveTab('history'); setEditingOrder(null); }} />}
+        {activeTab === 'inventory' && <InventoryView currentUser={currentUser} fetchWithAuth={fetchWithAuth} />}
+        {activeTab === 'requests' && <RequestsView currentUser={currentUser} showDeleted={showDeleted} fetchWithAuth={fetchWithAuth} />}
+        {activeTab === 'procurement' && <ProcurementView currentUser={currentUser} editOrder={editingOrder} onComplete={() => { setActiveTab('history'); setEditingOrder(null); }} fetchWithAuth={fetchWithAuth} />}
         {activeTab === 'history' && <ProcurementHistoryView currentUser={currentUser} showDeleted={showDeleted} onEditOrder={(order) => {
           setEditingOrder(order);
           setActiveTab('procurement');
-        }} />}
-        {activeTab === 'catalog' && <CatalogView currentUser={currentUser} showDeleted={showDeleted} />}
-        {activeTab === 'users' && <UserManagementView currentUser={currentUser} />}
-        {activeTab === 'settings' && <SystemLogsSettingsView currentUser={currentUser} />}
+        }} fetchWithAuth={fetchWithAuth} />}
+        {activeTab === 'catalog' && <CatalogView currentUser={currentUser} showDeleted={showDeleted} fetchWithAuth={fetchWithAuth} />}
+        {activeTab === 'users' && <UserManagementView currentUser={currentUser} fetchWithAuth={fetchWithAuth} />}
+        {activeTab === 'settings' && <SystemLogsSettingsView currentUser={currentUser} fetchWithAuth={fetchWithAuth} />}
       </div>
     </div>
   );
@@ -181,20 +191,14 @@ function TabButton({ active, onClick, children, icon }: { active: boolean, onCli
   );
 }
 
-function InventoryView({ currentUser }: { currentUser: any }) {
+function InventoryView({ currentUser, fetchWithAuth }: { currentUser: any, fetchWithAuth: any }) {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchInventory = () => {
-    fetch('/api/categories', {
-      headers: {
-        'Content-Type': 'application/json',
-        'x-username': currentUser?.username || '',
-        'x-user-role': currentUser?.role || ''
-      }
-    })
-      .then(res => res.json())
-      .then(data => {
+    fetchWithAuth('/api/categories')
+      .then((res: any) => res.json())
+      .then((data: any) => {
         if (Array.isArray(data)) {
           setInventory(data);
         } else {
@@ -203,7 +207,7 @@ function InventoryView({ currentUser }: { currentUser: any }) {
         }
         setLoading(false);
       })
-      .catch(err => {
+      .catch((err: any) => {
         console.error(err);
         setInventory([]);
         setLoading(false);
@@ -269,7 +273,7 @@ function InventoryView({ currentUser }: { currentUser: any }) {
   );
 }
 
-function RequestsView({ currentUser, showDeleted }: { currentUser: any, showDeleted: boolean }) {
+function RequestsView({ currentUser, showDeleted, fetchWithAuth }: { currentUser: any, showDeleted: boolean, fetchWithAuth: any }) {
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [requests, setRequests] = useState<Request[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -277,6 +281,12 @@ function RequestsView({ currentUser, showDeleted }: { currentUser: any, showDele
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingRequest, setEditingRequest] = useState<Request | null>(null);
   const [expandedRequest, setExpandedRequest] = useState<string | null>(null);
+  
+  const [cursors, setCursors] = useState<(string | null)>([null]);
+  const [page, setPage] = useState(0);
+  const limit = 50;
+  const [hasMore, setHasMore] = useState(true);
+
   const [requestFormData, setRequestFormData] = useState({
     requester_name: '',
     requester_email: '',
@@ -289,16 +299,21 @@ function RequestsView({ currentUser, showDeleted }: { currentUser: any, showDele
   });
   const [requestLineItems, setRequestLineItems] = useState<any[]>([]);
 
-  const fetchData = () => {
+  const fetchData = (startAfter?: string | null) => {
+    setLoading(true);
+    const requestsUrl = `/api/requests?limit=${limit}${startAfter ? `&startAfter=${startAfter}` : ''}`;
+    
     Promise.all([
-      fetch('/api/requests', { headers: { 'Content-Type': 'application/json', 'x-username': currentUser?.username || '', 'x-user-role': currentUser?.role || '' } }).then(res => res.json()),
-      fetch('/api/categories', { headers: { 'Content-Type': 'application/json', 'x-username': currentUser?.username || '', 'x-user-role': currentUser?.role || '' } }).then(res => res.json())
+      fetchWithAuth(requestsUrl).then((res: any) => res.json()),
+      fetchWithAuth('/api/categories').then((res: any) => res.json())
     ]).then(([requestsData, categoriesData]) => {
       if (Array.isArray(requestsData)) {
         setRequests(requestsData);
+        setHasMore(requestsData.length === limit);
       } else {
         console.error('Expected array but got:', requestsData);
         setRequests([]);
+        setHasMore(false);
       }
       
       if (Array.isArray(categoriesData)) {
@@ -315,8 +330,23 @@ function RequestsView({ currentUser, showDeleted }: { currentUser: any, showDele
   };
 
   useEffect(() => {
-    fetchData();
+    fetchData(null);
   }, []);
+
+  const handleNextPage = () => {
+    if (requests.length > 0) {
+      const lastId = requests[requests.length - 1].id;
+      setPage(prev => prev + 1);
+      fetchData(lastId);
+    }
+  };
+
+  const handlePrevPage = () => {
+    // Note: True bidirectional pagination with startAfter is complex without storing all cursors.
+    // For simplicity, we'll just reload the first page if they go back, or we could track cursors.
+    setPage(0);
+    fetchData(null);
+  };
 
   const handleEditRequest = (req: Request) => {
     setEditingRequest(req);
@@ -337,13 +367,8 @@ function RequestsView({ currentUser, showDeleted }: { currentUser: any, showDele
   const handleDeleteRequest = async (id: string) => {
     if (confirm('Are you sure you want to delete this request? This action cannot be undone.')) {
       try {
-        const response = await fetch(`/api/requests/${id}`, { 
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-username': currentUser?.username || '',
-            'x-user-role': currentUser?.role || ''
-          }
+        const response = await fetchWithAuth(`/api/requests/${id}`, { 
+          method: 'DELETE'
         });
         if (!response.ok) throw new Error('Failed to delete request');
         fetchData();
@@ -391,13 +416,8 @@ function RequestsView({ currentUser, showDeleted }: { currentUser: any, showDele
     };
 
     try {
-      const response = await fetch(url, {
+      const response = await fetchWithAuth(url, {
         method,
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-username': currentUser?.username || '',
-          'x-user-role': currentUser?.role || ''
-        },
         body: JSON.stringify(payload)
       });
 
@@ -424,13 +444,8 @@ function RequestsView({ currentUser, showDeleted }: { currentUser: any, showDele
   };
 
   const updateStatus = async (id: string, status: string) => {
-    await fetch(`/api/requests/${id}/status`, {
+    await fetchWithAuth(`/api/requests/${id}/status`, {
       method: 'PUT',
-      headers: { 
-        'Content-Type': 'application/json',
-        'x-username': currentUser?.username || '',
-        'x-user-role': currentUser?.role || ''
-      },
       body: JSON.stringify({ status, handled_by: currentUser.full_name })
     });
     fetchData();
@@ -438,13 +453,8 @@ function RequestsView({ currentUser, showDeleted }: { currentUser: any, showDele
 
   const handleRestoreRequest = async (id: string) => {
     if (confirm(`Are you sure you want to restore request ${id}?`)) {
-      await fetch(`/api/restore/requests/${id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-username': currentUser?.username || '',
-          'x-user-role': currentUser?.role || ''
-        }
+      await fetchWithAuth(`/api/restore/requests/${id}`, {
+        method: 'PUT'
       });
       fetchData();
     }
@@ -614,6 +624,28 @@ function RequestsView({ currentUser, showDeleted }: { currentUser: any, showDele
           {requests.filter(req => showDeleted ? req.is_deleted : !req.is_deleted).length === 0 && (
             <div className="text-center py-12 text-slate-500">No requests found.</div>
           )}
+          
+          <div className="flex justify-between items-center pt-4 border-t border-slate-100">
+            <div className="text-sm text-slate-500">
+              Page {page + 1}
+            </div>
+            <div className="flex gap-2">
+              <button 
+                onClick={handlePrevPage}
+                disabled={page === 0}
+                className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 disabled:opacity-50 transition-colors"
+              >
+                First Page
+              </button>
+              <button 
+                onClick={handleNextPage}
+                disabled={!hasMore}
+                className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 disabled:opacity-50 transition-colors"
+              >
+                Next Page
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -741,7 +773,7 @@ function RequestsView({ currentUser, showDeleted }: { currentUser: any, showDele
   );
 }
 
-function ProcurementView({ currentUser, editOrder, onComplete }: { currentUser: any, editOrder?: any, onComplete?: () => void }) {
+function ProcurementView({ currentUser, editOrder, onComplete, fetchWithAuth }: { currentUser: any, editOrder?: any, onComplete?: () => void, fetchWithAuth: any }) {
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [items, setItems] = useState<Item[]>([]);
   const [formData, setFormData] = useState({
@@ -761,15 +793,9 @@ function ProcurementView({ currentUser, editOrder, onComplete }: { currentUser: 
   const [lineItems, setLineItems] = useState<{item_number: string, quantity: number, price: number}[]>([]);
 
   useEffect(() => {
-    fetch('/api/items', {
-      headers: {
-        'Content-Type': 'application/json',
-        'x-username': currentUser?.username || '',
-        'x-user-role': currentUser?.role || ''
-      }
-    })
-      .then(res => res.json())
-      .then(data => {
+    fetchWithAuth('/api/items')
+      .then((res: any) => res.json())
+      .then((data: any) => {
         if (Array.isArray(data)) {
           setItems(data);
         } else {
@@ -777,7 +803,7 @@ function ProcurementView({ currentUser, editOrder, onComplete }: { currentUser: 
           setItems([]);
         }
       })
-      .catch(err => {
+      .catch((err: any) => {
         console.error(err);
         setItems([]);
       });
@@ -850,12 +876,9 @@ function ProcurementView({ currentUser, editOrder, onComplete }: { currentUser: 
         const formDataUpload = new FormData();
         formDataUpload.append('receipt', receiptFile);
         
-        const uploadRes = await fetch('/api/upload-receipt', {
+        const uploadRes = await fetchWithAuth('/api/upload-receipt', {
           method: 'POST',
-          headers: {
-            'x-username': currentUser?.username || '',
-            'x-user-role': currentUser?.role || ''
-          },
+          headers: { 'Content-Type': undefined }, // Let browser set boundary
           body: formDataUpload
         });
         
@@ -870,13 +893,8 @@ function ProcurementView({ currentUser, editOrder, onComplete }: { currentUser: 
       const url = editOrder ? `/api/orders/${editOrder.order_number}` : '/api/orders';
       const method = editOrder ? 'PUT' : 'POST';
 
-      await fetch(url, {
+      await fetchWithAuth(url, {
         method,
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-username': currentUser?.username || '',
-          'x-user-role': currentUser?.role || ''
-        },
         body: JSON.stringify({
           ...formData,
           line_items: lineItems,
@@ -1076,49 +1094,60 @@ function ProcurementView({ currentUser, editOrder, onComplete }: { currentUser: 
   );
 }
 
-function ProcurementHistoryView({ currentUser, onEditOrder, showDeleted }: { currentUser: any, onEditOrder: (order: any) => void, showDeleted: boolean }) {
+function ProcurementHistoryView({ currentUser, onEditOrder, showDeleted, fetchWithAuth }: { currentUser: any, onEditOrder: (order: any) => void, showDeleted: boolean, fetchWithAuth: any }) {
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
+  
+  const [page, setPage] = useState(0);
+  const limit = 50;
+  const [hasMore, setHasMore] = useState(true);
 
-  const fetchOrders = async () => {
+  const fetchOrders = async (startAfter?: string | null) => {
     try {
-      const res = await fetch('/api/orders', {
-        headers: {
-          'Content-Type': 'application/json',
-          'x-username': currentUser?.username || '',
-          'x-user-role': currentUser?.role || ''
-        }
-      });
+      setLoading(true);
+      const url = `/api/orders?limit=${limit}${startAfter ? `&startAfter=${startAfter}` : ''}`;
+      const res = await fetchWithAuth(url);
       if (!res.ok) console.error('Failed to fetch orders', await res.text());
       const data = await res.json();
       if (Array.isArray(data)) {
         setOrders(data);
+        setHasMore(data.length === limit);
       } else {
         console.error('Expected array but got:', data);
         setOrders([]);
+        setHasMore(false);
       }
       setLoading(false);
     } catch (err) {
       console.error(err);
       setOrders([]);
+      setHasMore(false);
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchOrders();
+    fetchOrders(null);
   }, []);
+
+  const handleNextPage = () => {
+    if (orders.length > 0) {
+      const lastId = orders[orders.length - 1].order_number;
+      setPage(prev => prev + 1);
+      fetchOrders(lastId);
+    }
+  };
+
+  const handlePrevPage = () => {
+    setPage(0);
+    fetchOrders(null);
+  };
 
   const handleDelete = async (orderNumber: string) => {
     if (confirm(`Are you sure you want to delete order ${orderNumber}? This will remove all associated line items and update inventory counts.`)) {
-      await fetch(`/api/orders/${orderNumber}`, { 
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-username': currentUser?.username || '',
-          'x-user-role': currentUser?.role || ''
-        }
+      await fetchWithAuth(`/api/orders/${orderNumber}`, { 
+        method: 'DELETE'
       });
       fetchOrders();
     }
@@ -1126,13 +1155,8 @@ function ProcurementHistoryView({ currentUser, onEditOrder, showDeleted }: { cur
 
   const handleRestoreOrder = async (orderNumber: string) => {
     if (confirm(`Are you sure you want to restore order ${orderNumber}? This will re-apply all associated line items and update inventory counts.`)) {
-      await fetch(`/api/restore/orders/${orderNumber}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-username': currentUser?.username || '',
-          'x-user-role': currentUser?.role || ''
-        }
+      await fetchWithAuth(`/api/restore/orders/${orderNumber}`, {
+        method: 'PUT'
       });
       fetchOrders();
     }
@@ -1262,11 +1286,33 @@ function ProcurementHistoryView({ currentUser, onEditOrder, showDeleted }: { cur
           </tbody>
         </table>
       </div>
+
+      <div className="flex justify-between items-center pt-4 border-t border-slate-100">
+        <div className="text-sm text-slate-500">
+          Page {page + 1}
+        </div>
+        <div className="flex gap-2">
+          <button 
+            onClick={handlePrevPage}
+            disabled={page === 0}
+            className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 disabled:opacity-50 transition-colors"
+          >
+            First Page
+          </button>
+          <button 
+            onClick={handleNextPage}
+            disabled={!hasMore}
+            className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 disabled:opacity-50 transition-colors"
+          >
+            Next Page
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
-function CatalogView({ currentUser, showDeleted }: { currentUser: any, showDeleted: boolean }) {
+function CatalogView({ currentUser, showDeleted, fetchWithAuth }: { currentUser: any, showDeleted: boolean, fetchWithAuth: any }) {
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [items, setItems] = useState<Item[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -1289,8 +1335,8 @@ function CatalogView({ currentUser, showDeleted }: { currentUser: any, showDelet
 
   const fetchData = () => {
     Promise.all([
-      fetch('/api/items', { headers: { 'Content-Type': 'application/json', 'x-username': currentUser?.username || '', 'x-user-role': currentUser?.role || '' } }).then(res => res.json()),
-      fetch('/api/categories', { headers: { 'Content-Type': 'application/json', 'x-username': currentUser?.username || '', 'x-user-role': currentUser?.role || '' } }).then(res => res.json())
+      fetchWithAuth('/api/items').then((res: any) => res.json()),
+      fetchWithAuth('/api/categories').then((res: any) => res.json())
     ]).then(([itemsData, categoriesData]) => {
       if (Array.isArray(itemsData)) {
         setItems(itemsData);
@@ -1332,13 +1378,8 @@ function CatalogView({ currentUser, showDeleted }: { currentUser: any, showDelet
 
   const handleDelete = async (itemNumber: string) => {
     if (confirm(`Are you sure you want to delete item ${itemNumber}?`)) {
-      await fetch(`/api/items/${itemNumber}`, { 
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-username': currentUser?.username || '',
-          'x-user-role': currentUser?.role || ''
-        }
+      await fetchWithAuth(`/api/items/${itemNumber}`, { 
+        method: 'DELETE'
       });
       fetchData();
     }
@@ -1346,13 +1387,8 @@ function CatalogView({ currentUser, showDeleted }: { currentUser: any, showDelet
 
   const handleRestoreItem = async (itemNumber: string) => {
     if (confirm(`Are you sure you want to restore item ${itemNumber}?`)) {
-      await fetch(`/api/restore/items/${itemNumber}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-username': currentUser?.username || '',
-          'x-user-role': currentUser?.role || ''
-        }
+      await fetchWithAuth(`/api/restore/items/${itemNumber}`, {
+        method: 'PUT'
       });
       fetchData();
     }
@@ -1380,13 +1416,8 @@ function CatalogView({ currentUser, showDeleted }: { currentUser: any, showDelet
     const method = editingItem ? 'PUT' : 'POST';
 
     try {
-      const response = await fetch(url, {
+      const response = await fetchWithAuth(url, {
         method,
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-username': currentUser?.username || '',
-          'x-user-role': currentUser?.role || ''
-        },
         body: JSON.stringify({
           ...formData,
           kit_components: kitComponents
@@ -1445,13 +1476,8 @@ function CatalogView({ currentUser, showDeleted }: { currentUser: any, showDelet
         return item;
       });
 
-      const response = await fetch('/api/bulk-upload/inventory', {
+      const response = await fetchWithAuth('/api/bulk-upload/inventory', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-username': currentUser?.username || '',
-          'x-user-role': currentUser?.role || ''
-        },
         body: JSON.stringify({ items })
       });
 
@@ -1474,12 +1500,7 @@ function CatalogView({ currentUser, showDeleted }: { currentUser: any, showDelet
 
   const handleDownloadTemplate = async (type: string) => {
     try {
-      const res = await fetch(`/api/export/template/${type}`, {
-        headers: { 
-          'x-user-role': currentUser?.role || '', 
-          'x-username': currentUser?.username || '' 
-        }
-      });
+      const res = await fetchWithAuth(`/api/export/template/${type}`);
       if (!res.ok) throw new Error('Download failed');
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
@@ -1734,7 +1755,7 @@ function CatalogView({ currentUser, showDeleted }: { currentUser: any, showDelet
   );
 }
 
-function UserManagementView({ currentUser }: { currentUser: any }) {
+function UserManagementView({ currentUser, fetchWithAuth }: { currentUser: any, fetchWithAuth: any }) {
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingUser, setEditingUser] = useState<any>(null);
@@ -1747,15 +1768,9 @@ function UserManagementView({ currentUser }: { currentUser: any }) {
   });
 
   const fetchUsers = () => {
-    fetch('/api/users', {
-      headers: {
-        'Content-Type': 'application/json',
-        'x-username': currentUser?.username || '',
-        'x-user-role': currentUser?.role || ''
-      }
-    })
-      .then(res => res.json())
-      .then(data => {
+    fetchWithAuth('/api/users')
+      .then((res: any) => res.json())
+      .then((data: any) => {
         if (Array.isArray(data)) {
           setUsers(data);
         } else {
@@ -1764,7 +1779,7 @@ function UserManagementView({ currentUser }: { currentUser: any }) {
         }
         setLoading(false);
       })
-      .catch(err => {
+      .catch((err: any) => {
         console.error(err);
         setUsers([]);
         setLoading(false);
@@ -1791,13 +1806,8 @@ function UserManagementView({ currentUser }: { currentUser: any }) {
       return;
     }
     if (confirm(`Are you sure you want to delete this user?`)) {
-      await fetch(`/api/users/${id}`, { 
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-username': currentUser?.username || '',
-          'x-user-role': currentUser?.role || ''
-        }
+      await fetchWithAuth(`/api/users/${id}`, { 
+        method: 'DELETE'
       });
       fetchUsers();
     }
@@ -1814,13 +1824,8 @@ function UserManagementView({ currentUser }: { currentUser: any }) {
       return;
     }
 
-    await fetch(url, {
+    await fetchWithAuth(url, {
       method,
-      headers: { 
-        'Content-Type': 'application/json',
-        'x-username': currentUser?.username || '',
-        'x-user-role': currentUser?.role || ''
-      },
       body: JSON.stringify(formData)
     });
     
@@ -1962,19 +1967,21 @@ function UserManagementView({ currentUser }: { currentUser: any }) {
   );
 }
 
-function SystemLogsSettingsView({ currentUser }: { currentUser: any }) {
+function SystemLogsSettingsView({ currentUser, fetchWithAuth }: { currentUser: any, fetchWithAuth: any }) {
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [logs, setLogs] = useState<any[]>([]);
   const [settings, setSettings] = useState({
     request_notification_email: '',
-    low_inventory_email: ''
+    low_inventory_email: '',
+    allowed_domains: [] as string[]
   });
+  const [newDomain, setNewDomain] = useState('');
   const [loading, setLoading] = useState(true);
 
   const fetchData = () => {
     Promise.all([
-      fetch('/api/audit_logs', { headers: { 'Content-Type': 'application/json', 'x-username': currentUser?.username || '', 'x-user-role': currentUser?.role || '' } }).then(res => res.json()),
-      fetch('/api/settings', { headers: { 'Content-Type': 'application/json', 'x-username': currentUser?.username || '', 'x-user-role': currentUser?.role || '' } }).then(res => res.json())
+      fetchWithAuth('/api/audit_logs').then((res: any) => res.json()),
+      fetchWithAuth('/api/settings').then((res: any) => res.json())
     ]).then(([logsData, settingsData]) => {
       if (Array.isArray(logsData)) {
         setLogs(logsData);
@@ -1986,7 +1993,8 @@ function SystemLogsSettingsView({ currentUser }: { currentUser: any }) {
       if (settingsData && !settingsData.error) {
         setSettings({
           request_notification_email: settingsData.request_notification_email || '',
-          low_inventory_email: settingsData.low_inventory_email || ''
+          low_inventory_email: settingsData.low_inventory_email || '',
+          allowed_domains: settingsData.allowed_domains || []
         });
       }
       setLoading(false);
@@ -2003,13 +2011,8 @@ function SystemLogsSettingsView({ currentUser }: { currentUser: any }) {
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch('/api/settings', {
+      const res = await fetchWithAuth('/api/settings', {
         method: 'PUT',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-username': currentUser?.username || '', 
-          'x-user-role': currentUser?.role || '' 
-        },
         body: JSON.stringify(settings)
       });
       if (res.ok) {
@@ -2021,6 +2024,17 @@ function SystemLogsSettingsView({ currentUser }: { currentUser: any }) {
     } catch (err) {
       alert('Error saving settings');
     }
+  };
+
+  const addDomain = () => {
+    if (newDomain && !settings.allowed_domains.includes(newDomain)) {
+      setSettings({ ...settings, allowed_domains: [...settings.allowed_domains, newDomain] });
+      setNewDomain('');
+    }
+  };
+
+  const removeDomain = (domain: string) => {
+    setSettings({ ...settings, allowed_domains: settings.allowed_domains.filter(d => d !== domain) });
   };
 
   if (loading) return <div className="animate-pulse space-y-4"><div className="h-10 bg-slate-100 rounded-lg w-full"></div></div>;
@@ -2128,6 +2142,34 @@ function SystemLogsSettingsView({ currentUser }: { currentUser: any }) {
               className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none"
               placeholder="inventory@example.com"
             />
+          </div>
+
+          <div className="pt-4 border-t border-slate-200">
+            <label className="block text-sm font-medium text-slate-700 mb-1">Allowed Email Domains</label>
+            <div className="flex gap-2 mb-2">
+              <input 
+                type="text" 
+                value={newDomain}
+                onChange={e => setNewDomain(e.target.value)}
+                className="flex-1 px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
+                placeholder="@example.gov"
+              />
+              <button 
+                type="button"
+                onClick={addDomain}
+                className="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm"
+              >
+                Add
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {settings.allowed_domains.map(domain => (
+                <span key={domain} className="inline-flex items-center gap-1 px-2 py-1 bg-slate-200 text-slate-700 rounded-lg text-xs">
+                  {domain}
+                  <button type="button" onClick={() => removeDomain(domain)} className="text-slate-500 hover:text-red-500">&times;</button>
+                </span>
+              ))}
+            </div>
           </div>
 
           <div className="pt-2">

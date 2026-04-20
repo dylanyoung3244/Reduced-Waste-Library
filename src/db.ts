@@ -1,5 +1,5 @@
 import { Firestore, FieldValue } from '@google-cloud/firestore';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 
 export const db = new Firestore();
 export { FieldValue };
@@ -26,7 +26,8 @@ export async function initDb() {
   if (!settingsSnapshot.exists) {
     await db.collection('settings').doc('email_config').set({
       request_notification_email: 'dylanyoung3244@gmail.com',
-      low_inventory_email: 'dylanyoung3244@gmail.com'
+      low_inventory_email: 'dylanyoung3244@gmail.com',
+      allowed_domains: ['@hawaiicounty.gov', '@hawaii.gov', '@hawaiipolice.gov', '@hawaiiprosecutors.gov']
     });
   }
 
