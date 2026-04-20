@@ -10,13 +10,15 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { db, initDb, FieldValue } from './src/db.js';
 
+import crypto from 'crypto';
+
 dotenv.config();
 
 const JWT_SECRET = process.env['JWT_SECRET'] || 'super-secret-key-change-me-in-production';
+const BUCKET_NAME = process.env['VITE_FIREBASE_STORAGE_BUCKET'] || 'rwlib-staging.firebasestorage.app';
 
 const storage = new Storage();
-const bucketName = process.env['GCS_BUCKET_NAME'] || 'missing-bucket-name';
-const bucket = storage.bucket(bucketName);
+const bucket = storage.bucket(BUCKET_NAME);
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -217,7 +219,7 @@ async function startServer() {
       const blobStream = blob.createWriteStream({ resumable: false, contentType: req.file.mimetype });
       blobStream.on('error', (err) => res.status(500).json({ error: err.message }));
       blobStream.on('finish', async () => {
-        const publicUrl = `https://storage.googleapis.com/${bucketName}/${blob.name}`;
+        const publicUrl = `https://storage.googleapis.com/${BUCKET_NAME}/${blob.name}`;
         await logAudit(req.user?.username, 'UPLOADED_RECEIPT', `Uploaded receipt file`, { filename: req.file?.originalname, url: publicUrl });
         res.json({ success: true, url: publicUrl });
       });
@@ -577,6 +579,86 @@ async function startServer() {
       const snapshot = await db.collection('inventory').get();
       const rows = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       res.json(rows);
+    } catch (error) { res.status(500).json({ error: String(error) }); }
+  });
+
+  // --- FILE UPLOAD ---
+  app.post('/api/upload', authenticateToken, upload.single('file'), async (req: any, res) => {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+    try {
+      const gcsFileName = `${Date.now()}-${crypto.randomUUID()}-${req.file.originalname}`;
+      const file = bucket.file(gcsFileName);
+
+      const stream = file.createWriteStream({
+        metadata: { contentType: req.file.mimetype },
+        resumable: false
+      });
+
+      stream.on('error', (err) => {
+        console.error('GCS Upload Error:', err);
+        res.status(500).json({ error: 'Failed to upload to storage' });
+      });
+
+      stream.on('finish', async () => {
+        try {
+          await file.makePublic();
+          const publicUrl = `https://storage.googleapis.com/${BUCKET_NAME}/${gcsFileName}`;
+          res.json({ url: publicUrl });
+        } catch (err) {
+          console.error('Make Public Error:', err);
+          res.status(500).json({ error: 'Failed to make file public' });
+        }
+      });
+
+      stream.end(req.file.buffer);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  // --- CATEGORIES ---
+  app.put('/api/categories/:id', authenticateToken, requireAdmin, async (req: any, res) => {
+    const { id } = req.params;
+    const { low_stock_threshold, image_url, default_yield, name, is_requestable } = req.body;
+    try {
+      const updateData: any = {};
+      if (low_stock_threshold !== undefined) updateData.low_stock_threshold = parseInt(low_stock_threshold) || 0;
+      if (image_url !== undefined) updateData.image_url = image_url;
+      if (default_yield !== undefined) updateData.default_yield = parseFloat(default_yield) || 0;
+      if (name !== undefined) updateData.name = name;
+      if (is_requestable !== undefined) updateData.is_requestable = parseInt(is_requestable) || 0;
+
+      await db.collection('categories').doc(id).update(updateData);
+      await logAudit(req.user?.username, 'UPDATED_CATEGORY', `Updated category ${id}`, updateData);
+      res.json({ success: true });
+    } catch (error) { res.status(500).json({ error: String(error) }); }
+  });
+
+  app.post('/api/categories', authenticateToken, requireAdmin, async (req: any, res) => {
+    const { name, is_requestable, low_stock_threshold, image_url, default_yield } = req.body;
+    try {
+      const docRef = await db.collection('categories').add({
+        name,
+        is_requestable: parseInt(is_requestable) || 0,
+        low_stock_threshold: parseInt(low_stock_threshold) || 100,
+        image_url: image_url || '',
+        default_yield: parseFloat(default_yield) || 0,
+        current_count: 0,
+        total_procured: 0,
+        total_checked_out: 0,
+        is_deleted: false
+      });
+      await logAudit(req.user?.username, 'CREATED_CATEGORY', `Created category ${name}`, { id: docRef.id });
+      res.json({ success: true, id: docRef.id });
+    } catch (error) { res.status(500).json({ error: String(error) }); }
+  });
+
+  app.get('/api/categories', async (req, res) => {
+    try {
+      const snapshot = await db.collection('categories').where('is_deleted', '==', false).get();
+      res.json(snapshot.docs.map((doc:any) => ({ id: doc.id, ...doc.data() })));
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 

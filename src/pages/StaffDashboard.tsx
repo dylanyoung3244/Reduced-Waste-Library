@@ -1,6 +1,71 @@
 import React, { useState, useEffect } from 'react';
 import { InventoryItem, Request, Category, Item } from '../types';
-import { Package, ClipboardList, ShoppingCart, Plus, Check, X, Download, Users, Edit, ChevronDown, ChevronUp, Trash2, ExternalLink, Upload, HelpCircle } from 'lucide-react';
+import { Package, ClipboardList, ShoppingCart, Plus, Check, X, Download, Users, Edit, ChevronDown, ChevronUp, Trash2, ExternalLink, Upload, HelpCircle, Layers, Settings as SettingsIcon, Image } from 'lucide-react';
+
+const FileUploadField = ({ onUploadSuccess, currentUrl, label, fetchWithAuth }: { onUploadSuccess: (url: string) => void, currentUrl?: string, label: string, fetchWithAuth: any }) => {
+  const [uploading, setUploading] = useState(false);
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetchWithAuth('/api/upload', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`
+        },
+        body: formData,
+        // Don't set Content-Type header when using FormData with fetch, it needs the boundary
+      });
+      // Need a custom fetch logic for FormData because fetchWithAuth sets JSON content type
+      const data = await res.json();
+      if (res.ok && data.url) {
+        onUploadSuccess(data.url);
+      } else {
+        alert('Upload failed: ' + (data.error || 'Unknown error'));
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Upload error');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <label className="text-sm font-medium text-slate-700">{label}</label>
+      <div className="flex gap-4 items-center">
+        <div className="relative group w-20 h-20 bg-slate-100 rounded-xl border border-dashed border-slate-300 flex items-center justify-center overflow-hidden">
+          {currentUrl ? (
+            <img src={currentUrl} alt="Preview" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+          ) : (
+            <Image className="w-8 h-8 text-slate-300" />
+          )}
+          {uploading && (
+            <div className="absolute inset-0 bg-white/80 flex items-center justify-center">
+              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-emerald-600"></div>
+            </div>
+          )}
+        </div>
+        <div className="flex-1">
+          <input 
+            type="file" 
+            accept="image/*" 
+            onChange={handleFileChange}
+            className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100"
+          />
+          {currentUrl && <p className="mt-1 text-[10px] text-slate-400 truncate max-w-[200px]">{currentUrl}</p>}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const HelpModal = ({ isOpen, onClose, title, children }: { isOpen: boolean, onClose: () => void, title: string, children: React.ReactNode }) => {
   if (!isOpen) return null;
@@ -37,7 +102,7 @@ const exportToCSV = (data: any[], filename: string) => {
 };
 
 export function StaffDashboard() {
-  const [activeTab, setActiveTab] = useState<'inventory' | 'requests' | 'procurement' | 'history' | 'catalog' | 'users' | 'settings'>('inventory');
+  const [activeTab, setActiveTab] = useState<'inventory' | 'requests' | 'procurement' | 'history' | 'catalog' | 'categories' | 'users' | 'settings'>('inventory');
   const [editingOrder, setEditingOrder] = useState<any>(null);
   const [showDeleted, setShowDeleted] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(() => {
@@ -46,11 +111,13 @@ export function StaffDashboard() {
   });
 
   const fetchWithAuth = async (url: string, options: any = {}) => {
-    const headers = {
+    const headers: any = {
       ...options.headers,
-      'Authorization': `Bearer ${currentUser?.token}`,
-      'Content-Type': 'application/json'
+      'Authorization': `Bearer ${currentUser?.token}`
     };
+    if (!(options.body instanceof FormData)) {
+      headers['Content-Type'] = 'application/json';
+    }
     return fetch(url, { ...options, headers });
   };
 
@@ -147,7 +214,8 @@ export function StaffDashboard() {
           <>
             <TabButton active={activeTab === 'procurement'} onClick={() => { setActiveTab('procurement'); setEditingOrder(null); }} icon={<ShoppingCart className="w-4 h-4" />}>Procurement</TabButton>
             <TabButton active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon={<ClipboardList className="w-4 h-4" />}>Procurement History</TabButton>
-            <TabButton active={activeTab === 'catalog'} onClick={() => setActiveTab('catalog')} icon={<Plus className="w-4 h-4" />}>Catalog</TabButton>
+            <TabButton active={activeTab === 'catalog'} onClick={() => setActiveTab('catalog')} icon={<Package className="w-4 h-4" />}>Catalog</TabButton>
+            <TabButton active={activeTab === 'categories'} onClick={() => setActiveTab('categories')} icon={<Layers className="w-4 h-4" />}>Categories & Kits</TabButton>
           </>
         )}
         
@@ -168,6 +236,7 @@ export function StaffDashboard() {
           setActiveTab('procurement');
         }} fetchWithAuth={fetchWithAuth} />}
         {activeTab === 'catalog' && <CatalogView currentUser={currentUser} showDeleted={showDeleted} fetchWithAuth={fetchWithAuth} />}
+        {activeTab === 'categories' && <CategoryManagementView fetchWithAuth={fetchWithAuth} />}
         {activeTab === 'users' && <UserManagementView currentUser={currentUser} fetchWithAuth={fetchWithAuth} />}
         {activeTab === 'settings' && <SystemLogsSettingsView currentUser={currentUser} fetchWithAuth={fetchWithAuth} />}
       </div>
@@ -1329,7 +1398,8 @@ function CatalogView({ currentUser, showDeleted, fetchWithAuth }: { currentUser:
     name: '',
     price: 0,
     pack_size: 1,
-    reorder_url: ''
+    reorder_url: '',
+    image_url: ''
   });
   const [kitComponents, setKitComponents] = useState<{category_id: string, yield_multiplier: number}[]>([]);
 
@@ -1371,7 +1441,8 @@ function CatalogView({ currentUser, showDeleted, fetchWithAuth }: { currentUser:
       name: item.name,
       price: item.price,
       pack_size: item.pack_size || 1,
-      reorder_url: item.reorder_url || ''
+      reorder_url: item.reorder_url || '',
+      image_url: item.image_url || ''
     });
     setKitComponents(item.kit_components || []);
   };
@@ -1430,7 +1501,7 @@ function CatalogView({ currentUser, showDeleted, fetchWithAuth }: { currentUser:
       }
       
       setEditingItem(null);
-      setFormData({ item_number: '', vendor: '', type: 'Compostable', name: '', price: 0, pack_size: 1, reorder_url: '' });
+      setFormData({ item_number: '', vendor: '', type: 'Compostable', name: '', price: 0, pack_size: 1, reorder_url: '', image_url: '' });
       setKitComponents([]);
       fetchData();
       alert(editingItem ? 'Item updated!' : 'Item added to catalog!');
@@ -1574,15 +1645,26 @@ function CatalogView({ currentUser, showDeleted, fetchWithAuth }: { currentUser:
               {items.filter(item => showDeleted ? item.is_deleted : !item.is_deleted).map(item => (
                 <tr key={item.item_number} className="hover:bg-slate-50/50 transition-colors">
                   <td className="px-4 py-3">
-                    <div className="font-medium text-slate-900 flex items-center gap-2">
-                      {item.name}
-                      {item.reorder_url && (
-                        <a href={item.reorder_url} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-700" title="Reorder Link">
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      )}
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-slate-100 rounded border border-slate-200 overflow-hidden flex items-center justify-center shrink-0">
+                        {item.image_url ? (
+                          <img src={item.image_url} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        ) : (
+                          <Package className="w-5 h-5 text-slate-300" />
+                        )}
+                      </div>
+                      <div>
+                        <div className="font-medium text-slate-900 flex items-center gap-2">
+                          {item.name}
+                          {item.reorder_url && (
+                            <a href={item.reorder_url} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-700" title="Reorder Link">
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                        </div>
+                        <div className="text-xs text-slate-500">{item.item_number}</div>
+                      </div>
                     </div>
-                    <div className="text-xs text-slate-500">{item.item_number}</div>
                   </td>
                   <td className="px-4 py-3">
                     <div className="text-slate-600">{item.vendor}</div>
@@ -1658,6 +1740,14 @@ function CatalogView({ currentUser, showDeleted, fetchWithAuth }: { currentUser:
             <div className="space-y-2 col-span-2">
               <label className="text-sm font-medium text-slate-700">Reorder URL (Optional)</label>
               <input type="url" value={formData.reorder_url} onChange={e => setFormData({...formData, reorder_url: e.target.value})} className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="https://..." />
+            </div>
+            <div className="col-span-2">
+              <FileUploadField 
+                label="Item Image (Optional)" 
+                currentUrl={formData.image_url} 
+                onUploadSuccess={(url) => setFormData({...formData, image_url: url})} 
+                fetchWithAuth={fetchWithAuth} 
+              />
             </div>
           </div>
 
@@ -1751,6 +1841,186 @@ function CatalogView({ currentUser, showDeleted, fetchWithAuth }: { currentUser:
         </div>
       )}
     </div>
+    </div>
+  );
+}
+
+function CategoryManagementView({ fetchWithAuth }: { fetchWithAuth: any }) {
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingId, setEditingId] = useState<string | number | null>(null);
+  const [formData, setFormData] = useState({ 
+    name: '', 
+    default_yield: 0, 
+    low_stock_threshold: 100, 
+    image_url: '',
+    is_requestable: 1
+  });
+
+  const fetchCategories = async () => {
+    setLoading(true);
+    try {
+      const res = await fetchWithAuth('/api/categories');
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setCategories(data);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchCategories();
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const url = editingId ? `/api/categories/${editingId}` : '/api/categories';
+    const method = editingId ? 'PUT' : 'POST';
+    try {
+      const res = await fetchWithAuth(url, {
+        method,
+        body: JSON.stringify(formData)
+      });
+      if (res.ok) {
+        setEditingId(null);
+        setFormData({ name: '', default_yield: 0, low_stock_threshold: 100, image_url: '', is_requestable: 1 });
+        fetchCategories();
+        alert(editingId ? 'Category updated!' : 'Category created!');
+      } else {
+        alert('Failed to save category');
+      }
+    } catch (err) {
+      alert('Error saving category');
+    }
+  };
+
+  if (loading) return <div className="animate-pulse space-y-4"><div className="h-10 bg-slate-100 rounded-lg w-full"></div></div>;
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="lg:col-span-2 space-y-4">
+        <div className="flex justify-between items-center">
+          <h2 className="text-xl font-semibold text-slate-900">Categories & Kit yield Management</h2>
+        </div>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {categories.map(cat => (
+            <div key={cat.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4 group hover:border-emerald-200 transition-colors">
+              <div className="w-16 h-16 bg-slate-50 rounded-lg border border-slate-100 overflow-hidden flex items-center justify-center shrink-0">
+                {cat.image_url ? (
+                  <img src={cat.image_url} alt={cat.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                ) : (
+                  <Package className="w-6 h-6 text-slate-300" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="font-semibold text-slate-900 truncate">{cat.name}</h4>
+                <div className="flex flex-col gap-0.5">
+                  <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Kit Yield: {cat.default_yield || 0} units</p>
+                  <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Low Stock Tip: {cat.low_stock_threshold || 100}</p>
+                </div>
+              </div>
+              <div className="flex gap-1 opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity">
+                <button 
+                  onClick={() => {
+                    setEditingId(cat.id);
+                    setFormData({ 
+                      name: cat.name, 
+                      default_yield: cat.default_yield || 0, 
+                      low_stock_threshold: cat.low_stock_threshold || 100,
+                      image_url: cat.image_url || '',
+                      is_requestable: cat.is_requestable ?? 1
+                    });
+                  }}
+                  className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                >
+                  <SettingsIcon className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 h-fit sticky top-6">
+        <h3 className="text-lg font-semibold text-slate-900 mb-4">{editingId ? 'Edit Category' : 'Create New Category'}</h3>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Category Name</label>
+            <input 
+              type="text" 
+              required
+              value={formData.name}
+              onChange={e => setFormData({...formData, name: e.target.value})}
+              className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none"
+              placeholder="e.g. Bamboo Forks"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Kit Yield</label>
+              <input 
+                type="number" 
+                required
+                min="0"
+                value={formData.default_yield}
+                onChange={e => setFormData({...formData, default_yield: parseFloat(e.target.value) || 0})}
+                className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Low Stock Tip</label>
+              <input 
+                type="number" 
+                required
+                min="0"
+                value={formData.low_stock_threshold}
+                onChange={e => setFormData({...formData, low_stock_threshold: parseInt(e.target.value) || 0})}
+                className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Visibility</label>
+            <select 
+              value={formData.is_requestable}
+              onChange={e => setFormData({...formData, is_requestable: parseInt(e.target.value)})}
+              className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none"
+            >
+              <option value={1}>Publicly Requestable</option>
+              <option value={0}>Internal Only</option>
+            </select>
+          </div>
+          
+          <FileUploadField 
+            label="Category Image" 
+            currentUrl={formData.image_url} 
+            onUploadSuccess={(url) => setFormData({...formData, image_url: url})} 
+            fetchWithAuth={fetchWithAuth} 
+          />
+
+          <div className="flex gap-2 pt-2">
+            <button type="submit" className="flex-1 bg-slate-900 text-white px-4 py-2 rounded-lg font-medium hover:bg-slate-800 transition-colors">
+              {editingId ? 'Save Changes' : 'Create Category'}
+            </button>
+            {editingId && (
+              <button 
+                type="button" 
+                onClick={() => {
+                  setEditingId(null);
+                  setFormData({ name: '', default_yield: 0, low_stock_threshold: 100, image_url: '', is_requestable: 1 });
+                }}
+                className="px-4 py-2 bg-white text-slate-700 border border-slate-300 rounded-lg font-medium hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
@@ -2050,24 +2320,64 @@ function SystemLogsSettingsView({ currentUser, fetchWithAuth }: { currentUser: a
         </ul>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 space-y-4">
-        <div className="flex justify-between items-center">
-          <h2 className="text-xl font-semibold text-slate-900">System Audit Logs</h2>
-          <div className="flex gap-2">
-            <button 
-              onClick={() => exportToCSV(logs.map(l => ({...l, metadata: l.metadata ? JSON.stringify(l.metadata) : ''})), 'audit_logs.csv')}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
-            >
-              <Download className="w-4 h-4" /> Export to CSV
-            </button>
-            <button 
-              onClick={() => setIsHelpOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition-colors"
-            >
-              <HelpCircle className="w-4 h-4" /> How to use this page
-            </button>
+        <div className="lg:col-span-2 space-y-6">
+          <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
+            <h3 className="text-lg font-semibold text-slate-900 mb-4">Allowed Email Domains</h3>
+            <p className="text-sm text-slate-600 mb-4">
+              Restict public form submissions to these official county or state email suffixes.
+            </p>
+            <div className="flex gap-2 mb-4">
+              <input 
+                type="text" 
+                value={newDomain}
+                onChange={e => setNewDomain(e.target.value)}
+                className="flex-1 px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none"
+                placeholder="e.g. @hawaiicounty.gov"
+              />
+              <button 
+                type="button"
+                onClick={addDomain}
+                className="px-6 py-2 bg-emerald-600 text-white rounded-xl font-medium hover:bg-emerald-700 transition-colors"
+              >
+                Add Domain
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {settings.allowed_domains.map(domain => (
+                <span key={domain} className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 text-slate-700 rounded-lg text-sm font-medium shadow-sm">
+                  {domain}
+                  <button 
+                    type="button" 
+                    onClick={() => removeDomain(domain)} 
+                    className="text-slate-400 hover:text-red-500 transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </span>
+              ))}
+              {settings.allowed_domains.length === 0 && (
+                <span className="text-sm text-slate-400 italic">No domains restricted. All emails will be accepted.</span>
+              )}
+            </div>
           </div>
-        </div>
+
+          <div className="flex justify-between items-center">
+            <h2 className="text-xl font-semibold text-slate-900">System Audit Logs</h2>
+            <div className="flex gap-2">
+              <button 
+                onClick={() => exportToCSV(logs.map(l => ({...l, metadata: l.metadata ? JSON.stringify(l.metadata) : ''})), 'audit_logs.csv')}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
+              >
+                <Download className="w-4 h-4" /> Export to CSV
+              </button>
+              <button 
+                onClick={() => setIsHelpOpen(true)}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition-colors"
+              >
+                <HelpCircle className="w-4 h-4" /> How to use this page
+              </button>
+            </div>
+          </div>
 
         <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} title="System Roles & Settings Walkthrough">
           <p><strong>What is this page?</strong> This handles system security, automated email triggers, and the master audit log.</p>
@@ -2144,37 +2454,9 @@ function SystemLogsSettingsView({ currentUser, fetchWithAuth }: { currentUser: a
             />
           </div>
 
-          <div className="pt-4 border-t border-slate-200">
-            <label className="block text-sm font-medium text-slate-700 mb-1">Allowed Email Domains</label>
-            <div className="flex gap-2 mb-2">
-              <input 
-                type="text" 
-                value={newDomain}
-                onChange={e => setNewDomain(e.target.value)}
-                className="flex-1 px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
-                placeholder="@example.gov"
-              />
-              <button 
-                type="button"
-                onClick={addDomain}
-                className="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm"
-              >
-                Add
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {settings.allowed_domains.map(domain => (
-                <span key={domain} className="inline-flex items-center gap-1 px-2 py-1 bg-slate-200 text-slate-700 rounded-lg text-xs">
-                  {domain}
-                  <button type="button" onClick={() => removeDomain(domain)} className="text-slate-500 hover:text-red-500">&times;</button>
-                </span>
-              ))}
-            </div>
-          </div>
-
           <div className="pt-2">
             <button type="submit" className="w-full bg-slate-900 text-white px-4 py-2 rounded-lg font-medium hover:bg-slate-800 transition-colors">
-              Save Settings
+              Save Notification Settings
             </button>
           </div>
         </form>

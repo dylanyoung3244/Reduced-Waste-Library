@@ -1,6 +1,10 @@
 export type Category = {
   id: string | number;
   name: string;
+  image_url?: string;
+  default_yield?: number;
+  low_stock_threshold?: number;
+  is_requestable?: number;
 };
 
 export type InventoryItem = {
@@ -53,5 +57,6 @@ export type Item = {
   price: number;
   pack_size: number;
   reorder_url?: string;
+  image_url?: string;
   kit_components: KitComponent[];
 };

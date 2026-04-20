@@ -22,13 +22,22 @@ export async function initDb() {
     }
   }
 
-  const settingsSnapshot = await db.collection('settings').doc('email_config').get();
-  if (!settingsSnapshot.exists) {
+  const settingsDoc = await db.collection('settings').doc('email_config').get();
+  const defaultDomains = ['@hawaiicounty.gov', '@hawaii.gov', '@hawaiipolice.gov', '@hawaiiprosecutors.gov'];
+
+  if (!settingsDoc.exists) {
     await db.collection('settings').doc('email_config').set({
       request_notification_email: 'dylanyoung3244@gmail.com',
       low_inventory_email: 'dylanyoung3244@gmail.com',
-      allowed_domains: ['@hawaiicounty.gov', '@hawaii.gov', '@hawaiipolice.gov', '@hawaiiprosecutors.gov']
+      allowed_domains: defaultDomains
     });
+  } else {
+    const data = settingsDoc.data();
+    if (data && !data.allowed_domains) {
+      await db.collection('settings').doc('email_config').update({
+        allowed_domains: defaultDomains
+      });
+    }
   }
 
   const categoriesSnapshot = await db.collection('categories').limit(1).get();

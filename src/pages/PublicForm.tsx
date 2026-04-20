@@ -63,26 +63,20 @@ export function PublicForm() {
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [setsRequested, setSetsRequested] = useState(0);
   const [allowedDomains, setAllowedDomains] = useState<string[]>([]);
-
-  const setYields: Record<string, number> = {
-    'Compostable Plates': 25,
-    'Reusable Cups': 25,
-    'Compostable Forks': 25,
-    'Compostable Knives': 25,
-    'Compostable Spoons': 25,
-    'Compostable Napkins': 50,
-  };
+  const [kitComponents, setKitComponents] = useState<any[]>([]);
 
   useEffect(() => {
-    fetch('/api/allowed-domains')
+    fetch('/api/settings')
       .then(res => res.json())
       .then(data => setAllowedDomains(data.allowed_domains || []))
-      .catch(err => console.error('Failed to load allowed domains', err));
+      .catch(err => console.error('Failed to load settings', err));
 
     fetch('/api/categories')
       .then(res => res.json())
       .then(data => {
-        setInventory(Array.isArray(data) ? data : []);
+        const cats = Array.isArray(data) ? data : [];
+        setInventory(cats);
+        setKitComponents(cats.filter((cat: any) => cat.default_yield > 0));
         setLoading(false);
       })
       .catch(err => {
@@ -140,8 +134,7 @@ export function PublicForm() {
 
   const getTotalQuantity = (item: InventoryItem) => {
     const aLaCarte = quantities[item.id] || 0;
-    const categoryName = item.name || 'Unknown';
-    const setYield = setYields[categoryName] || 0;
+    const setYield = (item as any).default_yield || 0;
     return aLaCarte + (setsRequested * setYield);
   };
 
@@ -370,18 +363,29 @@ export function PublicForm() {
           <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-5 mb-6">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-3">
               <div>
-                <h3 className="text-lg font-semibold text-emerald-900">25 Person Pre-Made Sets</h3>
+                <h3 className="text-lg font-semibold text-emerald-900">25 Person Pre-Made Kit</h3>
                 <p className="text-sm text-emerald-700 mt-1">
-                  This set includes: 25 compostable plates, forks, knives, and spoons; 25 reusable (aluminum) cups, and ~50 compostable napkins.
+                  Each kit includes: {kitComponents.map((c, i) => `${c.default_yield} ${c.name}${i === kitComponents.length - 1 ? '.' : ', '}`)}
                 </p>
+                <div className="flex flex-wrap gap-3 mt-3">
+                  {kitComponents.map(c => c.image_url && (
+                    <div key={c.id} className="group relative">
+                      <img src={c.image_url} alt={c.name} className="w-10 h-10 rounded-lg border border-emerald-200 object-cover shadow-sm grayscale hover:grayscale-0 transition-all cursor-help" referrerPolicy="no-referrer" />
+                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-emerald-900 text-white text-[10px] rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity">
+                        {c.name}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
               <div className="shrink-0">
+                <label className="block text-xs font-bold text-emerald-800 uppercase mb-1">Kit Quantity</label>
                 <input
                   type="number"
                   min="0"
                   value={setsRequested || ''}
                   onChange={(e) => setSetsRequested(Math.max(0, parseInt(e.target.value) || 0))}
-                  className="w-24 px-3 py-2 rounded-lg border border-emerald-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
+                  className="w-24 px-3 py-2 rounded-lg border border-emerald-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm"
                   placeholder="0"
                 />
               </div>
@@ -390,7 +394,7 @@ export function PublicForm() {
 
           <div className="space-y-4">
             <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">A La Carte Items (Intervals of 10)</h3>
-            {sortedInventory.map((item) => {
+            {sortedInventory.filter(cat => cat.is_requestable !== 0).map((item) => {
               const total = getTotalQuantity(item);
               const currentCount = item.current_count ?? item.count ?? 0;
               const categoryName = item.name || 'Unknown';
