@@ -621,20 +621,30 @@ async function startServer() {
   // --- CATEGORIES ---
   app.put('/api/categories/:id', authenticateToken, requireAdmin, async (req: any, res) => {
     const { id } = req.params;
-    const { low_stock_threshold, image_url, kit_yield, name, is_requestable } = req.body;
+    const { name, low_stock_threshold, kit_yield, is_requestable, image_url } = req.body;
+    
     try {
       const updateData = {
-        name,
-        low_stock_threshold: Number(low_stock_threshold) || 0,
-        kit_yield: Number(kit_yield) || 0,
-        is_requestable: Number(is_requestable) || 0,
+        name: name || '',
+        low_stock_threshold: parseInt(low_stock_threshold) || 0,
+        kit_yield: parseInt(kit_yield) || 0,
+        is_requestable: parseInt(is_requestable) || 0,
         image_url: image_url || ''
       };
 
       await db.collection('categories').doc(id).update(updateData);
-      await logAudit(req.user?.username, 'UPDATED_CATEGORY', `Updated category ${name || id} (Full Sync)`, updateData);
+      
+      await logAudit(
+        req.user?.username, 
+        'UPDATED_CATEGORY', 
+        `Updated category ${name || id}`, 
+        { category_id: id, ...updateData }
+      );
+      
       res.json({ success: true });
-    } catch (error) { res.status(500).json({ error: String(error) }); }
+    } catch (error) { 
+      res.status(500).json({ error: String(error) }); 
+    }
   });
 
   app.post('/api/categories', authenticateToken, requireAdmin, async (req: any, res) => {
