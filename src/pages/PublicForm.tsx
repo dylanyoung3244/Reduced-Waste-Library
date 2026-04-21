@@ -134,7 +134,7 @@ export function PublicForm() {
 
   const getTotalQuantity = (item: InventoryItem) => {
     const aLaCarte = quantities[item.id] || 0;
-    const setYield = (item as any).default_yield || 0;
+    const setYield = (item as any).kit_yield || 0;
     return aLaCarte + (setsRequested * setYield);
   };
 
@@ -250,6 +250,13 @@ export function PublicForm() {
     return aVal - bVal;
   });
 
+  // Calculate dynamic kit details
+  const platesItem = inventory.find(i => i.name === 'Compostable Plates' || (i as any).category_name === 'Compostable Plates') as any;
+  const baseKitSize = platesItem && platesItem.kit_yield > 0 ? platesItem.kit_yield : 25;
+
+  const napkinsItem = inventory.find(i => i.name === 'Compostable Napkins' || (i as any).category_name === 'Compostable Napkins') as any;
+  const napkinYield = napkinsItem && napkinsItem.kit_yield > 0 ? napkinsItem.kit_yield : 50;
+
   return (
     <div className="max-w-3xl mx-auto">
       <div className="mb-8">
@@ -363,9 +370,9 @@ export function PublicForm() {
           <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-5 mb-6">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-3">
               <div>
-                <h3 className="text-lg font-semibold text-emerald-900">25 Person Pre-Made Kit</h3>
+                <h3 className="text-lg font-semibold text-emerald-900">{baseKitSize} Person Pre-Made Sets</h3>
                 <p className="text-sm text-emerald-700 mt-1">
-                  Each kit includes: {kitComponents.map((c, i) => `${c.default_yield} ${c.name}${i === kitComponents.length - 1 ? '.' : ', '}`)}
+                  This set includes: {baseKitSize} compostable plates, forks, knives, and spoons; {baseKitSize} reusable (aluminum) cups, and ~{napkinYield} compostable napkins.
                 </p>
                 <div className="flex flex-wrap gap-3 mt-3">
                   {kitComponents.map(c => c.image_url && (

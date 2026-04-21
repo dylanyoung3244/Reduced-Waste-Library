@@ -1851,7 +1851,7 @@ function CategoryManagementView({ fetchWithAuth }: { fetchWithAuth: any }) {
   const [editingId, setEditingId] = useState<string | number | null>(null);
   const [formData, setFormData] = useState({ 
     name: '', 
-    default_yield: 0, 
+    kit_yield: 0, 
     low_stock_threshold: 100, 
     image_url: '',
     is_requestable: 1
@@ -1879,14 +1879,24 @@ function CategoryManagementView({ fetchWithAuth }: { fetchWithAuth: any }) {
     e.preventDefault();
     const url = editingId ? `/api/categories/${editingId}` : '/api/categories';
     const method = editingId ? 'PUT' : 'POST';
+    
+    // Explicitly parse fields to ensure they are the correct types
+    const payload = {
+      name: formData.name,
+      kit_yield: Number(formData.kit_yield),
+      low_stock_threshold: Number(formData.low_stock_threshold),
+      is_requestable: Number(formData.is_requestable),
+      image_url: formData.image_url
+    };
+
     try {
       const res = await fetchWithAuth(url, {
         method,
-        body: JSON.stringify(formData)
+        body: JSON.stringify(payload)
       });
       if (res.ok) {
         setEditingId(null);
-        setFormData({ name: '', default_yield: 0, low_stock_threshold: 100, image_url: '', is_requestable: 1 });
+        setFormData({ name: '', kit_yield: 0, low_stock_threshold: 100, image_url: '', is_requestable: 1 });
         fetchCategories();
         alert(editingId ? 'Category updated!' : 'Category created!');
       } else {
@@ -1900,90 +1910,114 @@ function CategoryManagementView({ fetchWithAuth }: { fetchWithAuth: any }) {
   if (loading) return <div className="animate-pulse space-y-4"><div className="h-10 bg-slate-100 rounded-lg w-full"></div></div>;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      <div className="lg:col-span-2 space-y-4">
-        <div className="flex justify-between items-center">
-          <h2 className="text-xl font-semibold text-slate-900">Categories & Kit yield Management</h2>
-        </div>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {categories.map(cat => (
-            <div key={cat.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4 group hover:border-emerald-200 transition-colors">
-              <div className="w-16 h-16 bg-slate-50 rounded-lg border border-slate-100 overflow-hidden flex items-center justify-center shrink-0">
-                {cat.image_url ? (
-                  <img src={cat.image_url} alt={cat.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                ) : (
-                  <Package className="w-6 h-6 text-slate-300" />
-                )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <h4 className="font-semibold text-slate-900 truncate">{cat.name}</h4>
-                <div className="flex flex-col gap-0.5">
-                  <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Kit Yield: {cat.default_yield || 0} units</p>
-                  <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Low Stock Tip: {cat.low_stock_threshold || 100}</p>
-                </div>
-              </div>
-              <div className="flex gap-1 opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity">
-                <button 
-                  onClick={() => {
-                    setEditingId(cat.id);
-                    setFormData({ 
-                      name: cat.name, 
-                      default_yield: cat.default_yield || 0, 
-                      low_stock_threshold: cat.low_stock_threshold || 100,
-                      image_url: cat.image_url || '',
-                      is_requestable: cat.is_requestable ?? 1
-                    });
-                  }}
-                  className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                >
-                  <SettingsIcon className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          ))}
+    <div className="space-y-6">
+      {/* Master Info Banner */}
+      <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6 flex gap-4">
+        <HelpCircle className="w-6 h-6 text-blue-600 shrink-0 mt-0.5" />
+        <div className="space-y-3">
+          <h3 className="font-bold text-blue-900 leading-none">Understanding Categories vs. Catalog</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
+            <p className="text-blue-800">
+              <strong className="block mb-1 text-blue-900">Categories (The Recipe):</strong>
+              Define the abstract types of items and the recipe for the pre-made kits on the public form. Edit this to change how many forks go into a pre-made set.
+            </p>
+            <p className="text-blue-800">
+              <strong className="block mb-1 text-blue-900">Catalog (The Reality):</strong>
+              Defines the physical inventory you have in the warehouse. Edit the Kit Components (BOM) here to map a category to a specific box of inventory.
+            </p>
+          </div>
+          <div className="pt-2 border-t border-blue-100 italic text-xs text-blue-700">
+            Staff Note: We built this cloud architecture because standard procurement takes months. Use the Categories to define what the public can request, and use the Catalog to strictly track the actual physical boxes we manage to acquire.
+          </div>
         </div>
       </div>
 
-      <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 h-fit sticky top-6">
-        <h3 className="text-lg font-semibold text-slate-900 mb-4">{editingId ? 'Edit Category' : 'Create New Category'}</h3>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Category Name</label>
-            <input 
-              type="text" 
-              required
-              value={formData.name}
-              onChange={e => setFormData({...formData, name: e.target.value})}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none"
-              placeholder="e.g. Bamboo Forks"
-            />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 space-y-4">
+          <div className="flex justify-between items-center">
+            <h2 className="text-xl font-semibold text-slate-900">Categories & Kit yield Management</h2>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {categories.map(cat => (
+              <div key={cat.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4 group hover:border-emerald-200 transition-colors">
+                <div className="w-16 h-16 bg-slate-50 rounded-lg border border-slate-100 overflow-hidden flex items-center justify-center shrink-0">
+                  {cat.image_url ? (
+                    <img src={cat.image_url} alt={cat.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                  ) : (
+                    <Package className="w-6 h-6 text-slate-300" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h4 className="font-semibold text-slate-900 truncate">{cat.name}</h4>
+                  <div className="flex flex-col gap-0.5">
+                    <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Qty per Pre-Made Kit: {cat.kit_yield || 0} units</p>
+                    <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Alert Threshold: {cat.low_stock_threshold || 100}</p>
+                  </div>
+                </div>
+                <div className="flex gap-1 opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button 
+                    onClick={() => {
+                      setEditingId(cat.id);
+                      setFormData({ 
+                        name: cat.name, 
+                        kit_yield: cat.kit_yield || 0, 
+                        low_stock_threshold: cat.low_stock_threshold || 100,
+                        image_url: cat.image_url || '',
+                        is_requestable: cat.is_requestable ?? 1
+                      });
+                    }}
+                    className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                  >
+                    <SettingsIcon className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 h-fit sticky top-6">
+          <h3 className="text-lg font-semibold text-slate-900 mb-4">{editingId ? 'Edit Category' : 'Create New Category'}</h3>
+          <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Kit Yield</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Category Name</label>
               <input 
-                type="number" 
+                type="text" 
                 required
-                min="0"
-                value={formData.default_yield}
-                onChange={e => setFormData({...formData, default_yield: parseFloat(e.target.value) || 0})}
+                value={formData.name}
+                onChange={e => setFormData({...formData, name: e.target.value})}
                 className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none"
+                placeholder="e.g. Bamboo Forks"
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Low Stock Tip</label>
-              <input 
-                type="number" 
-                required
-                min="0"
-                value={formData.low_stock_threshold}
-                onChange={e => setFormData({...formData, low_stock_threshold: parseInt(e.target.value) || 0})}
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none"
-              />
+            <div className="grid grid-cols-1 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-0.5">Quantity per Pre-Made Kit</label>
+                <p className="text-[11px] italic text-slate-500 mb-1.5 leading-tight">Sets how many of this item are automatically added when a user selects a 'Pre-Made Set' on the public form.</p>
+                <input 
+                  type="number" 
+                  required
+                  min="0"
+                  value={formData.kit_yield}
+                  onChange={e => setFormData({...formData, kit_yield: Number(e.target.value) || 0})}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-0.5">Alert Threshold (Email Trigger)</label>
+                <p className="text-[11px] italic text-slate-500 mb-1.5 leading-tight">Triggers an automated email to staff when physical inventory falls to or below this number.</p>
+                <input 
+                  type="number" 
+                  required
+                  min="0"
+                  value={formData.low_stock_threshold}
+                  onChange={e => setFormData({...formData, low_stock_threshold: parseInt(e.target.value) || 0})}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
             </div>
-          </div>
-          <div>
+            <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Visibility</label>
             <select 
               value={formData.is_requestable}
@@ -2011,7 +2045,7 @@ function CategoryManagementView({ fetchWithAuth }: { fetchWithAuth: any }) {
                 type="button" 
                 onClick={() => {
                   setEditingId(null);
-                  setFormData({ name: '', default_yield: 0, low_stock_threshold: 100, image_url: '', is_requestable: 1 });
+                  setFormData({ name: '', kit_yield: 0, low_stock_threshold: 100, image_url: '', is_requestable: 1 });
                 }}
                 className="px-4 py-2 bg-white text-slate-700 border border-slate-300 rounded-lg font-medium hover:bg-slate-50 transition-colors"
               >
@@ -2021,6 +2055,7 @@ function CategoryManagementView({ fetchWithAuth }: { fetchWithAuth: any }) {
           </div>
         </form>
       </div>
+    </div>
     </div>
   );
 }

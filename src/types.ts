@@ -2,7 +2,7 @@ export type Category = {
   id: string | number;
   name: string;
   image_url?: string;
-  default_yield?: number;
+  kit_yield?: number;
   low_stock_threshold?: number;
   is_requestable?: number;
 };

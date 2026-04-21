@@ -621,36 +621,39 @@ async function startServer() {
   // --- CATEGORIES ---
   app.put('/api/categories/:id', authenticateToken, requireAdmin, async (req: any, res) => {
     const { id } = req.params;
-    const { low_stock_threshold, image_url, default_yield, name, is_requestable } = req.body;
+    const { low_stock_threshold, image_url, kit_yield, name, is_requestable } = req.body;
     try {
-      const updateData: any = {};
-      if (low_stock_threshold !== undefined) updateData.low_stock_threshold = parseInt(low_stock_threshold) || 0;
-      if (image_url !== undefined) updateData.image_url = image_url;
-      if (default_yield !== undefined) updateData.default_yield = parseFloat(default_yield) || 0;
-      if (name !== undefined) updateData.name = name;
-      if (is_requestable !== undefined) updateData.is_requestable = parseInt(is_requestable) || 0;
+      const updateData = {
+        name,
+        low_stock_threshold: Number(low_stock_threshold) || 0,
+        kit_yield: Number(kit_yield) || 0,
+        is_requestable: Number(is_requestable) || 0,
+        image_url: image_url || ''
+      };
 
       await db.collection('categories').doc(id).update(updateData);
-      await logAudit(req.user?.username, 'UPDATED_CATEGORY', `Updated category ${id}`, updateData);
+      await logAudit(req.user?.username, 'UPDATED_CATEGORY', `Updated category ${name || id} (Full Sync)`, updateData);
       res.json({ success: true });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
   app.post('/api/categories', authenticateToken, requireAdmin, async (req: any, res) => {
-    const { name, is_requestable, low_stock_threshold, image_url, default_yield } = req.body;
+    const { name, is_requestable, low_stock_threshold, image_url, kit_yield } = req.body;
     try {
-      const docRef = await db.collection('categories').add({
-        name,
-        is_requestable: parseInt(is_requestable) || 0,
-        low_stock_threshold: parseInt(low_stock_threshold) || 100,
+      const categoryData = {
+        name: name || '',
+        is_requestable: Number(is_requestable) || 0,
+        low_stock_threshold: Number(low_stock_threshold) || 100,
         image_url: image_url || '',
-        default_yield: parseFloat(default_yield) || 0,
+        kit_yield: Number(kit_yield) || 0,
         current_count: 0,
         total_procured: 0,
         total_checked_out: 0,
         is_deleted: false
-      });
-      await logAudit(req.user?.username, 'CREATED_CATEGORY', `Created category ${name}`, { id: docRef.id });
+      };
+      
+      const docRef = await db.collection('categories').add(categoryData);
+      await logAudit(req.user?.username, 'CREATED_CATEGORY', `Created category ${name}`, { id: docRef.id, ...categoryData });
       res.json({ success: true, id: docRef.id });
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
