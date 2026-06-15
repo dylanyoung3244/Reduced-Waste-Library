@@ -156,6 +156,7 @@ export function PublicForm() {
     }
 
     const line_items = inventory
+      .filter(item => item.is_requestable === 1 || (item as any).is_requestable === true)
       .map(item => ({
         category_id: item.id,
         category_name: (item as any).name || item.category_name || item.category || 'Unknown Item',
@@ -168,10 +169,12 @@ export function PublicForm() {
       return;
     }
 
-    const exceededItems = inventory.filter(item => {
-      const currentCount = item.current_count ?? item.count ?? 0;
-      return getTotalQuantity(item) > currentCount;
-    });
+    const exceededItems = inventory
+      .filter(item => item.is_requestable === 1 || (item as any).is_requestable === true)
+      .filter(item => {
+        const currentCount = item.current_count ?? item.count ?? 0;
+        return getTotalQuantity(item) > currentCount;
+      });
     
     if (exceededItems.length > 0) {
       setError(`Requested quantity exceeds available inventory for: ${exceededItems.map(i => i.name || 'Unknown').join(', ')}`);
@@ -401,7 +404,7 @@ export function PublicForm() {
 
           <div className="space-y-4">
             <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">A La Carte Items (Intervals of 10)</h3>
-            {sortedInventory.filter(cat => cat.is_requestable !== 0).map((item) => {
+            {sortedInventory.filter(item => item.is_requestable === 1 || (item as any).is_requestable === true).map((item) => {
               const total = getTotalQuantity(item);
               const currentCount = item.current_count ?? item.count ?? 0;
               const categoryName = item.name || 'Unknown';

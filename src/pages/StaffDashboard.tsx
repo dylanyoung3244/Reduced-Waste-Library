@@ -11,7 +11,7 @@ const FileUploadField = ({ onUploadSuccess, currentUrl, label, fetchWithAuth }: 
 
     setUploading(true);
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('image', file);
 
     try {
       const res = await fetchWithAuth('/api/upload', {
@@ -1919,15 +1919,21 @@ function CategoryManagementView({ fetchWithAuth }: { fetchWithAuth: any }) {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
             <p className="text-blue-800">
               <strong className="block mb-1 text-blue-900">Categories (The Recipe):</strong>
-              Define the abstract types of items and the recipe for the pre-made kits on the public form. Edit this to change how many forks go into a pre-made set.
+              Define the abstract types of items and the recipe for the pre-made kits on the public form.
             </p>
             <p className="text-blue-800">
               <strong className="block mb-1 text-blue-900">Catalog (The Reality):</strong>
               Defines the physical inventory you have in the warehouse. Edit the Kit Components (BOM) here to map a category to a specific box of inventory.
             </p>
           </div>
-          <div className="pt-2 border-t border-blue-100 italic text-xs text-blue-700">
-            Staff Note: We built this cloud architecture because standard procurement takes months. Use the Categories to define what the public can request, and use the Catalog to strictly track the actual physical boxes we manage to acquire.
+          <div className="pt-4 border-t border-blue-100">
+            <h4 className="font-bold text-blue-900 text-sm mb-2">Form Fields Explained:</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-xs text-blue-800">
+              <p>• <strong className="text-blue-900">Quantity per Pre-Made Kit:</strong> How many of this item go into a single pre-made set.</p>
+              <p>• <strong className="text-blue-900">Alert Threshold:</strong> Sends an email to staff when physical stock drops below this number.</p>
+              <p>• <strong className="text-blue-900">Visibility:</strong> Set to 'Internal Only' to hide this item from the public request form.</p>
+              <p>• <strong className="text-blue-900">Category Image:</strong> The photo displayed next to the item on the public form.</p>
+            </div>
           </div>
         </div>
       </div>
@@ -2143,6 +2149,19 @@ function UserManagementView({ currentUser, fetchWithAuth }: { currentUser: any, 
   if (loading) return <div className="animate-pulse space-y-4"><div className="h-10 bg-slate-100 rounded-lg w-full"></div></div>;
 
   return (
+    <div className="space-y-6">
+      {/* User Management Info Banner */}
+      <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6 flex gap-4">
+        <Users className="w-6 h-6 text-blue-600 shrink-0 mt-0.5" />
+        <div className="space-y-2">
+          <h3 className="font-bold text-blue-900 leading-none">Understanding User Roles</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-blue-800">
+            <p><strong className="text-blue-900">Super Admin:</strong> Full access to all system settings, user management, and email domain whitelists.</p>
+            <p><strong className="text-blue-900">Admin:</strong> Can manage catalog inventory, approve/deny public requests, and edit category recipes.</p>
+          </div>
+        </div>
+      </div>
+
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
       <div className="lg:col-span-2 space-y-4">
         <div className="flex justify-between items-center">
@@ -2269,6 +2288,7 @@ function UserManagementView({ currentUser, fetchWithAuth }: { currentUser: any, 
         </form>
       </div>
     </div>
+    </div>
   );
 }
 
@@ -2346,14 +2366,18 @@ function SystemLogsSettingsView({ currentUser, fetchWithAuth }: { currentUser: a
 
   return (
     <div className="space-y-6">
-      <div className="bg-blue-50 text-blue-800 p-4 rounded-xl text-sm border border-blue-100">
-        <strong className="font-semibold block mb-2">User Roles & Permissions:</strong>
-        <ul className="list-disc pl-5 space-y-1">
-          <li><strong>Super Admin:</strong> Full system access. Can view the Recycle Bin, restore deleted records, edit global email settings, and manage user roles.</li>
-          <li><strong>Admin:</strong> Can process requests, log procurement orders, add/edit catalog items, and create basic users.</li>
-          <li><strong>Staff / Audit:</strong> Standard access. Can view inventory, requests, and historical data, but cannot modify system settings or delete records.</li>
-        </ul>
+      {/* System Settings Info Banner */}
+      <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 flex gap-4">
+        <SettingsIcon className="w-6 h-6 text-emerald-600 shrink-0 mt-0.5" />
+        <div className="space-y-2">
+          <h3 className="font-bold text-emerald-900 leading-none">Understanding System Settings</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-emerald-800">
+            <p><strong className="text-emerald-900">Email Whitelist:</strong> Controls which county domains (e.g., @hawaiicounty.gov) are allowed to submit requests on the public form.</p>
+            <p><strong className="text-emerald-900">System Logs:</strong> An immutable, automated audit trail of all inventory changes, approvals, and system events.</p>
+          </div>
+        </div>
       </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-6">
           <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">

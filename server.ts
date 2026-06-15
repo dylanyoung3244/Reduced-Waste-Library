@@ -15,7 +15,7 @@ import crypto from 'crypto';
 dotenv.config();
 
 const JWT_SECRET = process.env['JWT_SECRET'] || 'super-secret-key-change-me-in-production';
-const BUCKET_NAME = process.env['VITE_FIREBASE_STORAGE_BUCKET'] || 'rwlib-staging.firebasestorage.app';
+const BUCKET_NAME = process.env['VITE_FIREBASE_STORAGE_BUCKET'] || 'oscer-procurement-receipts-staging';
 
 const storage = new Storage();
 const bucket = storage.bucket(BUCKET_NAME);
@@ -215,16 +215,31 @@ async function startServer() {
   app.post('/api/upload-receipt', authenticateToken, requireAdmin, upload.single('receipt'), async (req: any, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
     try {
-      const blob = bucket.file(`receipts/${Date.now()}-${req.file.originalname}`);
-      const blobStream = blob.createWriteStream({ resumable: false, contentType: req.file.mimetype });
-      blobStream.on('error', (err) => res.status(500).json({ error: err.message }));
+      // Prepend folder name to keep bucket organized and sanitize filename
+      const sanitizedName = req.file.originalname.replace(/[^a-zA-Z0-9.]/g, '_');
+      const gcsFileName = `receipts/${Date.now()}-${sanitizedName}`;
+      const blob = bucket.file(gcsFileName);
+      
+      const blobStream = blob.createWriteStream({ 
+        metadata: { contentType: req.file.mimetype }
+      });
+      
+      blobStream.on('error', (err) => {
+        console.error('Receipt Upload Error:', err);
+        res.status(500).json({ error: 'Upload failed: ' + err.message });
+      });
+
       blobStream.on('finish', async () => {
-        const publicUrl = `https://storage.googleapis.com/${BUCKET_NAME}/${blob.name}`;
+        // Do NOT call file.makePublic(). The bucket is already public via IAM.
+        const publicUrl = `https://storage.googleapis.com/${BUCKET_NAME}/${gcsFileName}`;
         await logAudit(req.user?.username, 'UPLOADED_RECEIPT', `Uploaded receipt file`, { filename: req.file?.originalname, url: publicUrl });
         res.json({ success: true, url: publicUrl });
       });
       blobStream.end(req.file.buffer);
-    } catch (error) { res.status(500).json({ error: String(error) }); }
+    } catch (error) { 
+      console.error('Upload handler error:', error);
+      res.status(500).json({ error: String(error) }); 
+    }
   });
 
   // --- SETTINGS & AUDIT ---
@@ -545,18 +560,6 @@ async function startServer() {
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
-  app.put('/api/categories/:id', authenticateToken, requireAdmin, async (req: any, res) => {
-    const { id } = req.params;
-    const { low_stock_threshold } = req.body;
-    try {
-      await db.collection('categories').doc(id).update({
-        low_stock_threshold: parseInt(low_stock_threshold) || 100
-      });
-      await logAudit(req.user?.username, 'UPDATED_THRESHOLD', `Updated threshold for category ${id}`, { category_id: id, new_threshold: low_stock_threshold });
-      res.json({ success: true });
-    } catch (error) { res.status(500).json({ error: String(error) }); }
-  });
-
   app.get('/api/categories', async (req, res) => {
     try {
       let query: any = db.collection('categories').where('is_requestable', '==', 1);
@@ -583,37 +586,32 @@ async function startServer() {
   });
 
   // --- FILE UPLOAD ---
-  app.post('/api/upload', authenticateToken, upload.single('file'), async (req: any, res) => {
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  app.post('/api/upload', authenticateToken, requireAdmin, upload.single('image'), async (req: any, res) => {
+    if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
 
     try {
-      const gcsFileName = `${Date.now()}-${crypto.randomUUID()}-${req.file.originalname}`;
+      // Prepend folder name to keep bucket organized
+      const gcsFileName = `category-images/${Date.now()}-${req.file.originalname.replace(/[^a-zA-Z0-9.]/g, '_')}`;
       const file = bucket.file(gcsFileName);
 
       const stream = file.createWriteStream({
-        metadata: { contentType: req.file.mimetype },
-        resumable: false
+        metadata: { contentType: req.file.mimetype }
       });
 
       stream.on('error', (err) => {
         console.error('GCS Upload Error:', err);
-        res.status(500).json({ error: 'Failed to upload to storage' });
+        res.status(500).json({ error: 'Upload failed: ' + err.message });
       });
 
-      stream.on('finish', async () => {
-        try {
-          await file.makePublic();
-          const publicUrl = `https://storage.googleapis.com/${BUCKET_NAME}/${gcsFileName}`;
-          res.json({ url: publicUrl });
-        } catch (err) {
-          console.error('Make Public Error:', err);
-          res.status(500).json({ error: 'Failed to make file public' });
-        }
+      stream.on('finish', () => {
+        // Do NOT call file.makePublic(). The bucket is already public via IAM.
+        const publicUrl = `https://storage.googleapis.com/${BUCKET_NAME}/${gcsFileName}`;
+        res.json({ url: publicUrl });
       });
 
       stream.end(req.file.buffer);
     } catch (error) {
-      console.error(error);
+      console.error('Upload handler error:', error);
       res.status(500).json({ error: String(error) });
     }
   });
