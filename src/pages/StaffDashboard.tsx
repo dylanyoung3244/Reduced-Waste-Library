@@ -237,6 +237,10 @@ export function StaffDashboard() {
           </>
         )}
         
+        {(currentUser.role === 'admin' || currentUser.role === 'super_admin') && (
+          <TabButton active={activeTab === 'recurring'} onClick={() => setActiveTab('recurring')} icon={<Calendar className="w-4 h-4" />}>Recurring Orders</TabButton>
+        )}
+        
         {currentUser.role === 'super_admin' && (
           <>
             <TabButton active={activeTab === 'users'} onClick={() => setActiveTab('users')} icon={<Users className="w-4 h-4" />}>User Management</TabButton>
@@ -255,6 +259,7 @@ export function StaffDashboard() {
         }} fetchWithAuth={fetchWithAuth} />}
         {activeTab === 'catalog' && <CatalogView currentUser={currentUser} showDeleted={showDeleted} fetchWithAuth={fetchWithAuth} />}
         {activeTab === 'categories' && <CategoryManagementView fetchWithAuth={fetchWithAuth} />}
+        {activeTab === 'recurring' && <RecurringOrdersView fetchWithAuth={fetchWithAuth} />}
         {activeTab === 'users' && <UserManagementView currentUser={currentUser} fetchWithAuth={fetchWithAuth} />}
         {activeTab === 'settings' && <SystemLogsSettingsView currentUser={currentUser} fetchWithAuth={fetchWithAuth} />}
       </div>
@@ -2554,6 +2559,318 @@ function SystemLogsSettingsView({ currentUser, fetchWithAuth }: { currentUser: a
         </div>
       </div>
     </div>
+    </div>
+  );
+}
+
+export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
+  const [templates, setTemplates] = useState<any[]>([]);
+  const [categories, setCategories] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+
+  // New template form fields
+  const [department, setDepartment] = useState('');
+  const [eventName, setEventName] = useState('');
+  const [frequency, setFrequency] = useState<'weekly' | 'monthly'>('monthly');
+  const [nextRunDate, setNextRunDate] = useState('');
+  const [lineItems, setLineItems] = useState<any[]>([]);
+
+  const fetchTemplatesAndCategories = async () => {
+    try {
+      setLoading(true);
+      const [tplRes, catRes] = await Promise.all([
+        fetchWithAuth('/api/recurring'),
+        fetchWithAuth('/api/categories')
+      ]);
+      if (tplRes.ok && catRes.ok) {
+        setTemplates(await tplRes.json());
+        setCategories(await catRes.json());
+      }
+    } catch (err) {
+      console.error('Error fetching recurring orders:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchTemplatesAndCategories();
+  }, []);
+
+  const addLineItem = () => {
+    if (categories.length > 0) {
+      setLineItems([...lineItems, {
+        category_id: categories[0].id,
+        category_name: categories[0].name,
+        quantity: 1
+      }]);
+    }
+  };
+
+  const updateLineItem = (index: number, field: string, value: any) => {
+    const updated = [...lineItems];
+    if (field === 'category_id') {
+      const cat = categories.find(c => String(c.id) === String(value));
+      updated[index] = {
+        ...updated[index],
+        category_id: value,
+        category_name: cat ? cat.name : 'Unknown'
+      };
+    } else {
+      updated[index] = {
+        ...updated[index],
+        [field]: value
+      };
+    }
+    setLineItems(updated);
+  };
+
+  const removeLineItem = (index: number) => {
+    setLineItems(lineItems.filter((_, i) => i !== index));
+  };
+
+  const handleDeleteTemplate = async (id: string) => {
+    if (confirm('Are you sure you want to delete this recurring order template?')) {
+      try {
+        const response = await fetchWithAuth(`/api/recurring/${id}`, {
+          method: 'DELETE'
+        });
+        if (response.ok) {
+          fetchTemplatesAndCategories();
+        } else {
+          alert('Failed to delete template');
+        }
+      } catch (err) {
+        console.error('Error deleting template:', err);
+      }
+    }
+  };
+
+  const handleCreateTemplate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!department || !eventName || !nextRunDate || lineItems.length === 0) {
+      alert('Please fill out all required fields and add at least one line item.');
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      const response = await fetchWithAuth('/api/recurring', {
+        method: 'POST',
+        body: JSON.stringify({
+          department,
+          event_name: eventName,
+          frequency,
+          next_run_date: new Date(nextRunDate).toISOString(),
+          line_items: lineItems
+        })
+      });
+
+      if (response.ok) {
+        setDepartment('');
+        setEventName('');
+        setFrequency('monthly');
+        setNextRunDate('');
+        setLineItems([]);
+        fetchTemplatesAndCategories();
+      } else {
+        alert('Failed to create recurring order template');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Error creating template');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-8">
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-xl font-semibold text-slate-900">Recurring Order Spawner Templates</h2>
+          <p className="text-sm text-slate-500">Manage recurring order generation rules. Matching rules automatically spawn standard client requests with a 14-day lead-time.</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Templates list table */}
+        <div className="lg:col-span-2 space-y-4">
+          <div className="bg-slate-50 rounded-xl p-4 border border-slate-200">
+            <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wider mb-2">Active Recurrences</h3>
+            {loading ? (
+              <div className="py-8 text-center text-slate-500">Loading templates...</div>
+            ) : templates.length === 0 ? (
+              <div className="py-8 text-center text-slate-500">No active recurring rules specified. Get started using the spawner form on the right.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-xs font-semibold text-slate-600 uppercase">
+                      <th className="py-3 px-4">Department</th>
+                      <th className="py-3 px-4">Event Name</th>
+                      <th className="py-3 px-4">Frequency</th>
+                      <th className="py-3 px-4">Next Run Date</th>
+                      <th className="py-3 px-4">Line Items</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-sm">
+                    {templates.map(entry => (
+                      <tr key={entry.id} className="hover:bg-slate-50/50">
+                        <td className="py-3 px-4 font-medium text-slate-950">{entry.department}</td>
+                        <td className="py-3 px-4 text-slate-650">{entry.event_name}</td>
+                        <td className="py-3 px-4">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium uppercase tracking-wide ${
+                            entry.frequency === 'weekly' 
+                              ? 'bg-blue-50 text-blue-700 border border-blue-200' 
+                              : 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                          }`}>
+                            {entry.frequency}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-slate-550">
+                          {entry.next_run_date ? new Date(entry.next_run_date).toLocaleDateString() : 'N/A'}
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="text-xs text-slate-600 max-w-xs space-y-0.5">
+                            {(entry.line_items || []).map((li: any, idx: number) => (
+                              <div key={idx} className="flex justify-between border-b border-dashed border-slate-100 pb-0.5">
+                                <span>{li.category_name}</span>
+                                <span className="font-semibold text-slate-800 ml-2">x{li.quantity}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <button
+                            onClick={() => handleDeleteTemplate(entry.id)}
+                            className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50 cursor-pointer transition-colors"
+                            title="Delete Recurrence Rule"
+                          >
+                            <Trash2 className="w-4 h-4 inline-block" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Create template form */}
+        <div className="bg-slate-50 rounded-xl p-5 border border-slate-200 h-fit space-y-4">
+          <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wider">Configure New Recurrence</h3>
+          
+          <form onSubmit={handleCreateTemplate} className="space-y-4 text-sm text-slate-700">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Department</label>
+              <input
+                type="text"
+                required
+                value={department}
+                onChange={e => setDepartment(e.target.value)}
+                placeholder="e.g. Parks and Recreation"
+                className="w-full rounded border-slate-300 focus:border-emerald-500 focus:ring-emerald-500 text-sm px-3 py-2 bg-white border"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Event Name</label>
+              <input
+                type="text"
+                required
+                value={eventName}
+                onChange={e => setEventName(e.target.value)}
+                placeholder="e.g. Monthly Town Hall"
+                className="w-full rounded border-slate-300 focus:border-emerald-500 focus:ring-emerald-500 text-sm px-3 py-2 bg-white border"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Frequency</label>
+              <select
+                value={frequency}
+                onChange={e => setFrequency(e.target.value as 'weekly' | 'monthly')}
+                className="w-full rounded border-slate-300 focus:border-emerald-500 focus:ring-emerald-500 text-sm px-3 py-2 bg-white border"
+              >
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">First Spawner Run Date</label>
+              <input
+                type="date"
+                required
+                value={nextRunDate}
+                onChange={e => setNextRunDate(e.target.value)}
+                className="w-full rounded border-slate-300 focus:border-emerald-500 focus:ring-emerald-500 text-sm px-3 py-2 bg-white border text-slate-700"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex justify-between items-center">
+                <label className="block text-xs font-semibold text-slate-600">Reserved Line Items</label>
+                <button
+                  type="button"
+                  onClick={addLineItem}
+                  className="text-xs text-emerald-600 hover:text-emerald-800 font-medium cursor-pointer"
+                >
+                  + Add Item
+                </button>
+              </div>
+
+              {lineItems.length === 0 ? (
+                <p className="text-xs text-slate-500 italic">No line items added yet. Click "+ Add Item" to specify allocations.</p>
+              ) : (
+                <div className="space-y-2 border-t border-slate-200 pt-2 max-h-48 overflow-y-auto pr-1">
+                  {lineItems.map((item, idx) => (
+                    <div key={idx} className="flex gap-2 items-center">
+                      <select
+                        value={item.category_id}
+                        onChange={e => updateLineItem(idx, 'category_id', e.target.value)}
+                        className="flex-1 rounded border-slate-300 text-xs py-1 bg-white border text-slate-700"
+                      >
+                        {categories.map(c => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        min="1"
+                        required
+                        value={item.quantity}
+                        onChange={e => updateLineItem(idx, 'quantity', parseInt(e.target.value) || 1)}
+                        className="w-16 rounded border-slate-300 text-xs py-1 bg-white border text-slate-700"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeLineItem(idx)}
+                        className="text-red-500 hover:text-red-700 p-1"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <button
+              type="submit"
+              disabled={submitting}
+              className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white font-medium py-2 rounded text-sm transition-colors cursor-pointer mt-2"
+            >
+              {submitting ? 'Creating...' : 'Register Recurrence rule'}
+            </button>
+          </form>
+        </div>
+      </div>
     </div>
   );
 }

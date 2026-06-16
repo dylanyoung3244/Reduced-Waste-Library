@@ -5,6 +5,7 @@ export type Category = {
   kit_yield?: number;
   low_stock_threshold?: number;
   is_requestable?: number;
+  available_to_promise?: number;
 };
 
 export type InventoryItem = {
@@ -18,6 +19,7 @@ export type InventoryItem = {
   current_count?: number;
   count?: number;
   pack_size?: number;
+  available_to_promise?: number;
 };
 
 export type RequestLineItem = {

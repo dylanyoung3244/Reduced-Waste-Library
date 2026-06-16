@@ -172,8 +172,8 @@ export function PublicForm() {
     const exceededItems = inventory
       .filter(item => item.is_requestable === 1 || (item as any).is_requestable === true)
       .filter(item => {
-        const currentCount = item.current_count ?? item.count ?? 0;
-        return getTotalQuantity(item) > currentCount;
+        const availableCount = item.available_to_promise ?? item.current_count ?? item.count ?? 0;
+        return getTotalQuantity(item) > availableCount;
       });
     
     if (exceededItems.length > 0) {
@@ -406,9 +406,9 @@ export function PublicForm() {
             <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">A La Carte Items (Intervals of 10)</h3>
             {sortedInventory.filter(item => item.is_requestable === 1 || (item as any).is_requestable === true).map((item) => {
               const total = getTotalQuantity(item);
-              const currentCount = item.current_count ?? item.count ?? 0;
+              const availableCount = item.available_to_promise ?? item.current_count ?? item.count ?? 0;
               const categoryName = item.name || 'Unknown';
-              const isExceeded = total > currentCount;
+              const isExceeded = total > availableCount;
               // Check if the item object has a photo_url or image_url from the DB
               const imageUrl = (item as any).photo_url || (item as any).image_url;
 
@@ -423,8 +423,8 @@ export function PublicForm() {
                     <div>
                       <h3 className="font-medium text-slate-900">{categoryName}</h3>
                       <p className="text-sm text-slate-500 mt-1">
-                        {currentCount > 0 ? (
-                          <span className="text-emerald-600 font-medium">{currentCount} available</span>
+                        {availableCount > 0 ? (
+                          <span className="text-emerald-600 font-medium">{availableCount} available</span>
                         ) : (
                           <span className="text-red-500 font-medium">Out of stock</span>
                         )}
@@ -448,8 +448,8 @@ export function PublicForm() {
                         min="0"
                         step={item.name === 'Reusable Water Jugs' ? "1" : "10"}
                         value={quantities[item.id] || ''}
-                        onChange={(e) => handleQuantityChange(item.id, item.name, e.target.value, currentCount)}
-                        disabled={currentCount <= 0}
+                        onChange={(e) => handleQuantityChange(item.id, item.name, e.target.value, availableCount)}
+                        disabled={availableCount <= 0}
                         className="w-24 px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all disabled:opacity-50 disabled:bg-slate-100"
                         placeholder="0"
                       />
