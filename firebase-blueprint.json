@@ -1,0 +1,139 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User account information",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "full_name": { "type": "string" },
+        "role": { "type": "string", "enum": ["super_admin", "admin", "audit", "user", "staff"] }
+      },
+      "required": ["username", "password", "full_name"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "An audit log entry for system actions",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "action": { "type": "string" },
+        "details": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "metadata": { "type": "object" }
+      },
+      "required": ["username", "action", "details", "timestamp"]
+    },
+    "Request": {
+      "title": "Request",
+      "description": "An inventory check out request",
+      "type": "object",
+      "properties": {
+        "requester_name": { "type": "string" },
+        "requester_email": { "type": "string" },
+        "requester_phone": { "type": "string" },
+        "department": { "type": "string" },
+        "event_name": { "type": "string" },
+        "check_out_date": { "type": "string" },
+        "check_in_date": { "type": "string" },
+        "status": { "type": "string", "enum": ["Pending", "Approved", "Denied", "Modified", "Archived"] },
+        "is_deleted": { "type": "boolean" },
+        "line_items": { "type": "array" },
+        "handled_by": { "type": "string" }
+      },
+      "required": ["requester_name", "requester_email", "department", "event_name", "status"]
+    },
+    "InventoryItem": {
+      "title": "InventoryItem",
+      "description": "An inventory item in the catalog",
+      "type": "object",
+      "properties": {
+        "item_number": { "type": "string" },
+        "vendor": { "type": "string" },
+        "type": { "type": "string" },
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "pack_size": { "type": "integer" },
+        "current_count": { "type": "integer" },
+        "total_procured": { "type": "integer" },
+        "total_checked_out": { "type": "integer" },
+        "reorder_url": { "type": "string" },
+        "is_deleted": { "type": "boolean" },
+        "kit_components": { "type": "array" }
+      },
+      "required": ["item_number", "name", "price"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A procurement order",
+      "type": "object",
+      "properties": {
+        "order_number": { "type": "string" },
+        "order_name": { "type": "string" },
+        "date_ordered": { "type": "string" },
+        "date_delivered": { "type": "string" },
+        "subtotal": { "type": "number" },
+        "shipping": { "type": "number" },
+        "tax": { "type": "number" },
+        "total": { "type": "number" },
+        "procurement_method": { "type": "string" },
+        "logged_by": { "type": "string" },
+        "is_deleted": { "type": "boolean" },
+        "line_items": { "type": "array" },
+        "receipt_url": { "type": "string" }
+      },
+      "required": ["order_number", "order_name", "date_ordered", "total"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "An item category or kit definition",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "is_requestable": { "type": "integer" },
+        "current_count": { "type": "integer" },
+        "total_procured": { "type": "integer" },
+        "total_checked_out": { "type": "integer" },
+        "low_stock_threshold": { "type": "integer" },
+        "is_deleted": { "type": "boolean" }
+      },
+      "required": ["name", "is_requestable"]
+    },
+    "Setting": {
+      "title": "Setting",
+      "description": "System settings and configuration",
+      "type": "object",
+      "properties": {
+        "request_notification_email": { "type": "string" },
+        "low_inventory_email": { "type": "string" },
+        "allowed_domains": { "type": "array" }
+      }
+    },
+    "RecurringTemplate": {
+      "title": "RecurringTemplate",
+      "description": "A recurring order spawner template",
+      "type": "object",
+      "properties": {
+        "department": { "type": "string" },
+        "event_name": { "type": "string" },
+        "frequency": { "type": "string", "enum": ["weekly", "monthly"] },
+        "next_run_date": { "type": "string" },
+        "line_items": { "type": "array" },
+        "is_deleted": { "type": "boolean" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["department", "event_name", "frequency", "next_run_date"]
+    }
+  },
+  "firestore": {
+    "users": { "schema": "User", "description": "User accounts" },
+    "audit_logs": { "schema": "AuditLog", "description": "System audit trail logs" },
+    "requests": { "schema": "Request", "description": "Item/kit requests" },
+    "inventory": { "schema": "InventoryItem", "description": "Item catalog and specific item tracks" },
+    "orders": { "schema": "Order", "description": "Procurement orders tracking" },
+    "categories": { "schema": "Category", "description": "Product categories / kits track" },
+    "settings": { "schema": "Setting", "description": "Email configure and allowed domains list" },
+    "recurring_templates": { "schema": "RecurringTemplate", "description": "Recurring spawner orders template" }
+  }
+}

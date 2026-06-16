@@ -1,7 +1,21 @@
 import { Firestore, FieldValue } from '@google-cloud/firestore';
 import bcrypt from 'bcryptjs';
+import fs from 'fs';
+import path from 'path';
 
-export const db = new Firestore();
+let dbConfig: any = {};
+try {
+  const configPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
+  if (fs.existsSync(configPath)) {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    dbConfig.projectId = config.projectId;
+    dbConfig.databaseId = config.firestoreDatabaseId;
+  }
+} catch (error) {
+  console.error('Failed to load firebase-applet-config.json for server-side firestore:', error);
+}
+
+export const db = new Firestore(dbConfig);
 export { FieldValue };
 
 export async function initDb() {

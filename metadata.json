@@ -1,5 +1,6 @@
 {
   "name": "Reduced Waste Library",
   "description": "Inventory management application for a reduced waste library, handling public requests and staff procurement.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
