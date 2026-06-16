@@ -673,6 +673,143 @@ async function startServer() {
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
+  // --- RECURRING ORDERS (Templates-Spawner) ---
+  app.get('/api/recurring', authenticateToken, async (req: any, res) => {
+    try {
+      const snapshot = await db.collection('recurring_templates').where('is_deleted', '==', false).get();
+      res.json(snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() })));
+    } catch (error) { res.status(500).json({ error: String(error) }); }
+  });
+
+  app.post('/api/recurring', authenticateToken, async (req: any, res) => {
+    const { department, event_name, frequency, next_run_date, line_items } = req.body;
+    try {
+      const templateData = {
+        department: department || '',
+        event_name: event_name || '',
+        frequency: frequency || 'monthly',
+        next_run_date: next_run_date || new Date().toISOString(),
+        line_items: line_items || [],
+        is_deleted: false,
+        created_at: new Date().toISOString()
+      };
+      const docRef = await db.collection('recurring_templates').add(templateData);
+      await logAudit(req.user?.username, 'CREATED_RECURRING_TEMPLATE', `Created recurring template for ${department}`, { id: docRef.id, ...templateData });
+      res.json({ success: true, id: docRef.id });
+    } catch (error) { res.status(500).json({ error: String(error) }); }
+  });
+
+  app.delete('/api/recurring/:id', authenticateToken, async (req: any, res) => {
+    const { id } = req.params;
+    try {
+      await db.collection('recurring_templates').doc(id).update({ is_deleted: true });
+      await logAudit(req.user?.username, 'DELETED_RECURRING_TEMPLATE', `Archived/deleted recurring template ${id}`, { id });
+      res.json({ success: true });
+    } catch (error) { res.status(500).json({ error: String(error) }); }
+  });
+
+  app.post('/api/cron/process-recurring', async (req, res) => {
+    if (req.headers['x-cron-secret'] !== process.env.CRON_SECRET) {
+      return res.status(401).send('Unauthorized');
+    }
+
+    try {
+      const now = new Date().toISOString();
+      const snapshot = await db.collection('recurring_templates').where('is_deleted', '==', false).get();
+      const templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+      
+      const dueTemplates = templates.filter(temp => temp.next_run_date && temp.next_run_date <= now);
+      
+      if (dueTemplates.length === 0) {
+        return res.json({ success: true, processed: 0 });
+      }
+
+      // Load settings
+      const settingsDoc = await db.collection('settings').doc('email_config').get();
+      const settings = settingsDoc.data() || {};
+      let transporter: any = null;
+      if (process.env['SMTP_USER'] && process.env['SMTP_PASS']) {
+        transporter = nodemailer.createTransport({
+          host: process.env['SMTP_HOST'] || 'smtp.gmail.com',
+          port: parseInt(process.env['SMTP_PORT'] || '587'),
+          secure: process.env['SMTP_SECURE'] === 'true',
+          auth: { user: process.env['SMTP_USER'], pass: process.env['SMTP_PASS'] }
+        });
+      }
+
+      for (const temp of dueTemplates) {
+        // 1. Create custom request
+        const requestData = {
+          requester_name: `Recurring Spawner - ${temp.department}`,
+          requester_email: settings.request_notification_email || 'dyoung@hawaiicounty.gov',
+          requester_phone: '808-961-8211',
+          department: temp.department || 'Other',
+          event_name: `Recurring: ${temp.event_name}`,
+          check_out_date: new Date().toISOString().split('T')[0],
+          check_in_date: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // check in in 2 days
+          status: 'Approved',
+          is_deleted: false,
+          line_items: temp.line_items || []
+        };
+
+        const docRef = await db.collection('requests').add(requestData);
+
+        // 2. Subtract inventory
+        for (const item of temp.line_items || []) {
+          if (!item.category_id) continue;
+          const catRef = db.collection('categories').doc(String(item.category_id));
+          const catDoc = await catRef.get();
+          if (catDoc.exists) {
+            const catData = catDoc.data() as any;
+            const qty = Number(item.quantity) || 0;
+            
+            await catRef.update({
+              current_count: FieldValue.increment(-qty),
+              total_checked_out: FieldValue.increment(qty)
+            });
+
+            // Low inventory check/notification
+            const newCount = (catData.current_count || 0) - qty;
+            const threshold = catData.low_stock_threshold || 100;
+            if (newCount < threshold && transporter) {
+              transporter.sendMail({
+                from: process.env['SMTP_USER'],
+                to: settings.low_inventory_email || process.env['NOTIFICATION_EMAIL'],
+                subject: `Low Inventory: ${catData.name}`,
+                text: `Warning: ${catData.name} has fallen to ${newCount}. Threshold is ${threshold}.`
+              }).catch((e: any) => console.error(e));
+            }
+          }
+        }
+
+        // 3. Log audit event
+        await logAudit('System', 'SPAWNED_RECURRING', `Automatically spawned recurring order for ${temp.department}`, {
+          request_id: docRef.id,
+          template_id: temp.id,
+          department: temp.department,
+          event_name: temp.event_name
+        });
+
+        // 4. Update the next_run_date
+        const nextRun = new Date(temp.next_run_date);
+        if (temp.frequency === 'weekly') {
+          nextRun.setDate(nextRun.getDate() + 7);
+        } else {
+          // Default monthly
+          nextRun.setMonth(nextRun.getMonth() + 1);
+        }
+
+        await db.collection('recurring_templates').doc(temp.id).update({
+          next_run_date: nextRun.toISOString()
+        });
+      }
+
+      res.json({ success: true, processed: dueTemplates.length });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
   app.use('/api', (req, res) => res.status(404).json({ error: 'API route not found' }));
   app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
     res.status(500).json({ error: err.message || 'Internal Server Error' });

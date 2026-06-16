@@ -1,6 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { InventoryItem, Request, Category, Item } from '../types';
-import { Package, ClipboardList, ShoppingCart, Plus, Check, X, Download, Users, Edit, ChevronDown, ChevronUp, Trash2, ExternalLink, Upload, HelpCircle, Layers, Settings as SettingsIcon, Image } from 'lucide-react';
+import { Package, ClipboardList, ShoppingCart, Plus, Check, X, Download, Users, Edit, ChevronDown, ChevronUp, Trash2, ExternalLink, Upload, HelpCircle, Layers, Settings as SettingsIcon, Image, Calendar } from 'lucide-react';
+
+const authenticatedFetch = async (url: string, options: RequestInit = {}) => {
+  const token = localStorage.getItem('token') || (localStorage.getItem('user') ? JSON.parse(localStorage.getItem('user')!).token : null);
+  const headers = {
+    ...options.headers,
+    'Authorization': `Bearer ${token}`
+  };
+  
+  const response = await fetch(url, { ...options, headers });
+  
+  if (response.status === 401 || response.status === 403) {
+    // Token is invalid or expired. Clear it and force re-login.
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    window.location.reload(); 
+  }
+  
+  return response;
+};
 
 const FileUploadField = ({ onUploadSuccess, currentUrl, label, fetchWithAuth }: { onUploadSuccess: (url: string) => void, currentUrl?: string, label: string, fetchWithAuth: any }) => {
   const [uploading, setUploading] = useState(false);
@@ -102,7 +121,7 @@ const exportToCSV = (data: any[], filename: string) => {
 };
 
 export function StaffDashboard() {
-  const [activeTab, setActiveTab] = useState<'inventory' | 'requests' | 'procurement' | 'history' | 'catalog' | 'categories' | 'users' | 'settings'>('inventory');
+  const [activeTab, setActiveTab] = useState<'inventory' | 'requests' | 'procurement' | 'history' | 'catalog' | 'categories' | 'users' | 'settings' | 'recurring'>('inventory');
   const [editingOrder, setEditingOrder] = useState<any>(null);
   const [showDeleted, setShowDeleted] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(() => {
@@ -113,12 +132,11 @@ export function StaffDashboard() {
   const fetchWithAuth = async (url: string, options: any = {}) => {
     const headers: any = {
       ...options.headers,
-      'Authorization': `Bearer ${currentUser?.token}`
     };
     if (!(options.body instanceof FormData)) {
       headers['Content-Type'] = 'application/json';
     }
-    return fetch(url, { ...options, headers });
+    return authenticatedFetch(url, { ...options, headers });
   };
 
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
