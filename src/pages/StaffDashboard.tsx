@@ -669,6 +669,7 @@ function RequestsView({ currentUser, showDeleted, fetchWithAuth, viewType }: { c
                     className={`px-3 py-1.5 rounded-lg text-sm font-medium border-0 outline-none cursor-pointer ${
                       req.status === 'Awaiting' ? 'bg-amber-100 text-amber-800' :
                       req.status === 'Approved' ? 'bg-blue-100 text-blue-800' :
+                      req.status === 'Awaiting Pick Up' ? 'bg-sky-100 text-sky-800' :
                       req.status === 'Checked-out' ? 'bg-purple-100 text-purple-800' :
                       req.status === 'Checked-in' ? 'bg-emerald-100 text-emerald-800' :
                       req.status === 'Test' ? 'bg-slate-200 text-slate-700' :
@@ -677,6 +678,7 @@ function RequestsView({ currentUser, showDeleted, fetchWithAuth, viewType }: { c
                   >
                     <option value="Awaiting">Awaiting</option>
                     <option value="Approved">Approved</option>
+                    <option value="Awaiting Pick Up">Awaiting Pick Up</option>
                     <option value="Checked-out">Checked-out</option>
                     <option value="Checked-in">Checked-in</option>
                     <option value="Denied">Denied</option>
@@ -847,6 +849,7 @@ function RequestsView({ currentUser, showDeleted, fetchWithAuth, viewType }: { c
                   <select value={requestFormData.status} onChange={e => setRequestFormData({...requestFormData, status: e.target.value})} className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none">
                     <option value="Awaiting">Awaiting</option>
                     <option value="Approved">Approved</option>
+                    <option value="Awaiting Pick Up">Awaiting Pick Up</option>
                     <option value="Checked-out">Checked-out</option>
                     <option value="Checked-in">Checked-in</option>
                     <option value="Denied">Denied</option>

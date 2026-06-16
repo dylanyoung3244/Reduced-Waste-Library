@@ -443,7 +443,7 @@ async function startServer() {
           if (oldStatus === 'Checked-out' && newStatus !== 'Checked-out') {
             await catRef.update({ total_checked_out: FieldValue.increment(-qty) });
             if (newStatus === 'Checked-in' && catData.name?.toLowerCase().includes('reusable')) await catRef.update({ current_count: FieldValue.increment(qty) });
-            else if (['Denied', 'Awaiting', 'Approved'].includes(newStatus)) await catRef.update({ current_count: FieldValue.increment(qty) });
+            else if (['Denied', 'Awaiting', 'Approved', 'Awaiting Pick Up'].includes(newStatus)) await catRef.update({ current_count: FieldValue.increment(qty) });
           }
         }
       }
@@ -571,7 +571,7 @@ async function startServer() {
     try {
       const requestsSnapshot = await db.collection('requests').where('is_deleted', '==', false).get();
       const activeRequests = requestsSnapshot.docs.map(doc => doc.data() as any)
-        .filter(r => r.status === 'Approved' || r.status === 'Awaiting');
+        .filter(r => r.status === 'Awaiting' || r.status === 'Awaiting Pick Up');
 
       const reservedCounts: Record<string, number> = {};
       for (const reqObj of activeRequests) {
@@ -699,7 +699,7 @@ async function startServer() {
     try {
       const requestsSnapshot = await db.collection('requests').where('is_deleted', '==', false).get();
       const activeRequests = requestsSnapshot.docs.map(doc => doc.data() as any)
-        .filter(r => r.status === 'Approved' || r.status === 'Awaiting');
+        .filter(r => r.status === 'Awaiting' || r.status === 'Awaiting Pick Up');
 
       const reservedCounts: Record<string, number> = {};
       for (const reqObj of activeRequests) {
@@ -766,7 +766,7 @@ async function startServer() {
 
     try {
       const targetDate = new Date();
-      targetDate.setDate(targetDate.getDate() + 14);
+      targetDate.setDate(targetDate.getDate() + 30);
       const targetDateStr = targetDate.toISOString();
 
       const snapshot = await db.collection('recurring_templates').where('is_deleted', '==', false).get();
