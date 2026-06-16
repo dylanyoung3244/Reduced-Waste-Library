@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { InventoryItem, Request, Category, Item } from '../types';
-import { Package, ClipboardList, ShoppingCart, Plus, Check, X, Download, Users, Edit, ChevronDown, ChevronUp, Trash2, ExternalLink, Upload, HelpCircle, Layers, Settings as SettingsIcon, Image, Calendar } from 'lucide-react';
+import { Package, ClipboardList, ShoppingCart, Plus, Check, X, Download, Users, Edit, ChevronDown, ChevronUp, Trash2, ExternalLink, Upload, HelpCircle, Layers, Settings as SettingsIcon, Image, Calendar, Search, History, BookOpen } from 'lucide-react';
 
 const authenticatedFetch = async (url: string, options: RequestInit = {}) => {
   const token = localStorage.getItem('token') || (localStorage.getItem('user') ? JSON.parse(localStorage.getItem('user')!).token : null);
@@ -121,7 +121,7 @@ const exportToCSV = (data: any[], filename: string) => {
 };
 
 export function StaffDashboard() {
-  const [activeTab, setActiveTab] = useState<'inventory' | 'requests' | 'procurement' | 'history' | 'catalog' | 'categories' | 'users' | 'settings' | 'recurring'>('inventory');
+  const [activeTab, setActiveTab] = useState<'requests_active' | 'requests_history' | 'recurring' | 'inventory' | 'categories' | 'catalog' | 'procurement' | 'history' | 'users' | 'settings'>('requests_active');
   const [editingOrder, setEditingOrder] = useState<any>(null);
   const [showDeleted, setShowDeleted] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(() => {
@@ -225,33 +225,36 @@ export function StaffDashboard() {
       </div>
 
       <div className="flex gap-2 border-b border-slate-200 pb-px overflow-x-auto">
-        <TabButton active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} icon={<Package className="w-4 h-4" />}>Inventory</TabButton>
-        <TabButton active={activeTab === 'requests'} onClick={() => setActiveTab('requests')} icon={<ClipboardList className="w-4 h-4" />}>Requests</TabButton>
+        <TabButton active={activeTab === 'requests_active'} onClick={() => setActiveTab('requests_active')} icon={<ClipboardList className="w-4 h-4" />}>Active Requests</TabButton>
+        <TabButton active={activeTab === 'requests_history'} onClick={() => setActiveTab('requests_history')} icon={<History className="w-4 h-4" />}>Request History</TabButton>
+        
+        {(currentUser.role === 'admin' || currentUser.role === 'super_admin') && (
+          <TabButton active={activeTab === 'recurring'} onClick={() => setActiveTab('recurring')} icon={<Calendar className="w-4 h-4" />}>Recurring Requests</TabButton>
+        )}
+        
+        <TabButton active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} icon={<Package className="w-4 h-4" />}>Catalog (Inventory)</TabButton>
         
         {currentUser.role !== 'user' && (
           <>
-            <TabButton active={activeTab === 'procurement'} onClick={() => { setActiveTab('procurement'); setEditingOrder(null); }} icon={<ShoppingCart className="w-4 h-4" />}>Procurement</TabButton>
-            <TabButton active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon={<ClipboardList className="w-4 h-4" />}>Procurement History</TabButton>
-            <TabButton active={activeTab === 'catalog'} onClick={() => setActiveTab('catalog')} icon={<Package className="w-4 h-4" />}>Catalog</TabButton>
             <TabButton active={activeTab === 'categories'} onClick={() => setActiveTab('categories')} icon={<Layers className="w-4 h-4" />}>Categories & Kits</TabButton>
+            <TabButton active={activeTab === 'catalog'} onClick={() => setActiveTab('catalog')} icon={<BookOpen className="w-4 h-4" />}>Catalog Editor</TabButton>
+            <TabButton active={activeTab === 'procurement'} onClick={() => { setActiveTab('procurement'); setEditingOrder(null); }} icon={<ShoppingCart className="w-4 h-4" />}>Procurement</TabButton>
+            <TabButton active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon={<History className="w-4 h-4" />}>Procurement History</TabButton>
           </>
-        )}
-        
-        {(currentUser.role === 'admin' || currentUser.role === 'super_admin') && (
-          <TabButton active={activeTab === 'recurring'} onClick={() => setActiveTab('recurring')} icon={<Calendar className="w-4 h-4" />}>Recurring Orders</TabButton>
         )}
         
         {currentUser.role === 'super_admin' && (
           <>
             <TabButton active={activeTab === 'users'} onClick={() => setActiveTab('users')} icon={<Users className="w-4 h-4" />}>User Management</TabButton>
-            <TabButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={<ClipboardList className="w-4 h-4" />}>System Logs & Settings</TabButton>
+            <TabButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={<ClipboardList className="w-4 h-4" />}>System Logs</TabButton>
           </>
         )}
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 min-h-[500px]">
         {activeTab === 'inventory' && <InventoryView currentUser={currentUser} fetchWithAuth={fetchWithAuth} />}
-        {activeTab === 'requests' && <RequestsView currentUser={currentUser} showDeleted={showDeleted} fetchWithAuth={fetchWithAuth} />}
+        {activeTab === 'requests_active' && <RequestsView currentUser={currentUser} showDeleted={showDeleted} fetchWithAuth={fetchWithAuth} viewType="active" />}
+        {activeTab === 'requests_history' && <RequestsView currentUser={currentUser} showDeleted={showDeleted} fetchWithAuth={fetchWithAuth} viewType="history" />}
         {activeTab === 'procurement' && <ProcurementView currentUser={currentUser} editOrder={editingOrder} onComplete={() => { setActiveTab('history'); setEditingOrder(null); }} fetchWithAuth={fetchWithAuth} />}
         {activeTab === 'history' && <ProcurementHistoryView currentUser={currentUser} showDeleted={showDeleted} onEditOrder={(order) => {
           setEditingOrder(order);
@@ -365,7 +368,7 @@ function InventoryView({ currentUser, fetchWithAuth }: { currentUser: any, fetch
   );
 }
 
-function RequestsView({ currentUser, showDeleted, fetchWithAuth }: { currentUser: any, showDeleted: boolean, fetchWithAuth: any }) {
+function RequestsView({ currentUser, showDeleted, fetchWithAuth, viewType }: { currentUser: any, showDeleted: boolean, fetchWithAuth: any, viewType: 'active' | 'history' }) {
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [requests, setRequests] = useState<Request[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -378,6 +381,28 @@ function RequestsView({ currentUser, showDeleted, fetchWithAuth }: { currentUser
   const [page, setPage] = useState(0);
   const limit = 50;
   const [hasMore, setHasMore] = useState(true);
+
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const filteredRequests = requests
+    .filter(req => showDeleted ? req.is_deleted : !req.is_deleted)
+    .filter(req => {
+      if (viewType === 'active') {
+        return ['Awaiting', 'Approved', 'Awaiting Pick Up', 'Checked-out'].includes(req.status);
+      } else if (viewType === 'history') {
+        return true; // History displays ALL requests (including 'Checked-in' and 'Denied')
+      }
+      return true;
+    })
+    .filter(req => {
+      if (!searchQuery) return true;
+      const term = searchQuery.toLowerCase();
+      return (
+        (req.requester_name || '').toLowerCase().includes(term) ||
+        (req.department || '').toLowerCase().includes(term) ||
+        (req.event_name || '').toLowerCase().includes(term)
+      );
+    });
 
   const [requestFormData, setRequestFormData] = useState({
     requester_name: '',
@@ -561,58 +586,72 @@ function RequestsView({ currentUser, showDeleted, fetchWithAuth }: { currentUser
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-4">
-          <div className="flex justify-between items-center">
-            <h2 className="text-xl font-semibold text-slate-900">Requests Queue</h2>
-          <div className="flex gap-2">
-            <button 
-              onClick={() => {
-                setEditingRequest(null);
-                setRequestFormData({
-                  requester_name: '',
-                  requester_email: '',
-                  requester_phone: '',
-                  department: '',
-                  event_name: '',
-                  check_out_date: '',
-                  check_in_date: '',
-                  status: 'Awaiting'
-                });
-                setRequestLineItems([]);
-                setIsFormOpen(true);
-              }}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 transition-colors"
-            >
-              <Plus className="w-4 h-4" /> Add Historical Request
-            </button>
-            <button 
-              onClick={() => exportToCSV(requests.map(r => ({...r, line_items: JSON.stringify(r.line_items)})), 'requests.csv')}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
-            >
-              <Download className="w-4 h-4" /> Export to CSV
-            </button>
-            <button 
-              onClick={() => setIsHelpOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition-colors"
-            >
-              <HelpCircle className="w-4 h-4" /> How to use this page
-            </button>
+          <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
+            <h2 className="text-xl font-semibold text-slate-900">
+              {viewType === 'active' ? 'Active Requests Queue' : 'Request History Log'}
+            </h2>
+            <div className="flex flex-wrap gap-2">
+              <button 
+                onClick={() => {
+                  setEditingRequest(null);
+                  setRequestFormData({
+                    requester_name: '',
+                    requester_email: '',
+                    requester_phone: '',
+                    department: '',
+                    event_name: '',
+                    check_out_date: '',
+                    check_in_date: '',
+                    status: 'Awaiting'
+                  });
+                  setRequestLineItems([]);
+                  setIsFormOpen(true);
+                }}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 transition-colors"
+              >
+                <Plus className="w-4 h-4" /> Add Historical Request
+              </button>
+              <button 
+                onClick={() => exportToCSV(requests.map(r => ({...r, line_items: JSON.stringify(r.line_items)})), 'requests.csv')}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
+              >
+                <Download className="w-4 h-4" /> Export to CSV
+              </button>
+              <button 
+                onClick={() => setIsHelpOpen(true)}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition-colors"
+              >
+                <HelpCircle className="w-4 h-4" /> How to use this page
+              </button>
+            </div>
           </div>
-        </div>
 
-        <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} title="Requests Workflow Walkthrough">
-          <p><strong>What is this page?</strong> This is where you manage item requests submitted by staff or the public. You must update the status of each request as it moves through the real-world process.</p>
-          <h3 className="font-bold text-lg mt-4 text-blue-800">The Step-by-Step Status Workflow:</h3>
-          <ul className="list-disc pl-5 space-y-2">
-            <li><span className="bg-yellow-100 font-semibold px-1 rounded">Awaiting:</span> A brand new request. No action has been taken yet. Review it to see if we have enough inventory to fulfill it.</li>
-            <li><span className="bg-blue-100 font-semibold px-1 rounded">Approved:</span> You have reviewed the request and set aside the items. <em>Action:</em> Changing the status to Approved will automatically email the requester telling them their items are ready for pickup!</li>
-            <li><span className="bg-green-100 font-semibold px-1 rounded">Checked-out:</span> The person has physically picked up the items and left the building. <em>Action:</em> Changing to this status automatically subtracts the items from our inventory. If this causes an item to drop below its "Low Stock Threshold," the system will automatically email the team to reorder it.</li>
-            <li><span className="bg-purple-100 font-semibold px-1 rounded">Checked-in:</span> The person has returned the items. <em>Action:</em> Changing to this status will automatically add reusable items back into our available inventory. Consumable items (like paper plates) will not be added back.</li>
-            <li><span className="bg-red-100 font-semibold px-1 rounded">Denied:</span> We cannot fulfill the request. This restores the items to inventory if they were previously checked out.</li>
-          </ul>
-        </HelpModal>
+          {/* Search bar */}
+          <div className="relative w-full">
+            <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search by requester, department, or event name..."
+              className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
 
-        <div className="grid grid-cols-1 gap-2">
-          {requests.filter(req => showDeleted ? req.is_deleted : !req.is_deleted).map(req => (
+          <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} title="Requests Workflow Walkthrough">
+            <p><strong>What is this page?</strong> This is where you manage item requests submitted by staff or the public. You must update the status of each request as it moves through the real-world process.</p>
+            <h3 className="font-bold text-lg mt-4 text-blue-800">The Step-by-Step Status Workflow:</h3>
+            <ul className="list-disc pl-5 space-y-2">
+              <li><span className="bg-yellow-100 font-semibold px-1 rounded">Awaiting:</span> A brand new request. No action has been taken yet. Review it to see if we have enough inventory to fulfill it.</li>
+              <li><span className="bg-blue-100 font-semibold px-1 rounded">Approved:</span> You have reviewed the request and set aside the items. <em>Action:</em> Changing the status to Approved will automatically email the requester telling them their items are ready for pickup!</li>
+              <li><span className="bg-green-100 font-semibold px-1 rounded">Checked-out:</span> The person has physically picked up the items and left the building. <em>Action:</em> Changing to this status automatically subtracts the items from our inventory. If this causes an item to drop below its "Low Stock Threshold," the system will automatically email the team to reorder it.</li>
+              <li><span className="bg-purple-100 font-semibold px-1 rounded">Checked-in:</span> The person has returned the items. <em>Action:</em> Changing to this status will automatically add reusable items back into our available inventory. Consumable items (like paper plates) will not be added back.</li>
+              <li><span className="bg-red-100 font-semibold px-1 rounded">Denied:</span> We cannot fulfill the request. This restores the items to inventory if they were previously checked out.</li>
+            </ul>
+          </HelpModal>
+
+          <div className="grid grid-cols-1 gap-2">
+            {filteredRequests.map(req => (
             <div key={req.id} className="border border-slate-200 rounded-xl overflow-hidden bg-white hover:border-slate-300 transition-colors">
               <div 
                 className="flex items-center justify-between p-4 cursor-pointer"
@@ -713,8 +752,8 @@ function RequestsView({ currentUser, showDeleted, fetchWithAuth }: { currentUser
               )}
             </div>
           ))}
-          {requests.filter(req => showDeleted ? req.is_deleted : !req.is_deleted).length === 0 && (
-            <div className="text-center py-12 text-slate-500">No requests found.</div>
+          {filteredRequests.length === 0 && (
+            <div className="text-center py-12 text-slate-500 font-medium">No matching requests found.</div>
           )}
           
           <div className="flex justify-between items-center pt-4 border-t border-slate-100">
@@ -1190,6 +1229,21 @@ function ProcurementHistoryView({ currentUser, onEditOrder, showDeleted, fetchWi
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const filteredOrders = orders
+    .filter(order => showDeleted ? order.is_deleted : !order.is_deleted)
+    .filter(order => {
+      if (!searchQuery) return true;
+      const term = searchQuery.toLowerCase();
+      
+      const matchOrderNumber = (order.order_number || '').toLowerCase().includes(term) || (order.po_number || '').toLowerCase().includes(term);
+      const matchVendor = (order.vendor || '').toLowerCase().includes(term) || (order.line_items || []).some((li: any) => (li.vendor || '').toLowerCase().includes(term));
+      const matchItemName = (order.line_items || []).some((li: any) => (li.item_name || '').toLowerCase().includes(term));
+      const matchOrderName = (order.order_name || '').toLowerCase().includes(term);
+      
+      return matchOrderNumber || matchVendor || matchItemName || matchOrderName;
+    });
   
   const [page, setPage] = useState(0);
   const limit = 50;
@@ -1258,7 +1312,7 @@ function ProcurementHistoryView({ currentUser, onEditOrder, showDeleted, fetchWi
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
         <h2 className="text-xl font-semibold text-slate-900">Procurement History</h2>
         <button 
           onClick={() => exportToCSV(orders.map(o => ({...o, line_items: JSON.stringify(o.line_items)})), 'procurement_history.csv')}
@@ -1267,6 +1321,19 @@ function ProcurementHistoryView({ currentUser, onEditOrder, showDeleted, fetchWi
           <Download className="w-4 h-4" /> Export to CSV
         </button>
       </div>
+
+      {/* Search bar inside Procurement History */}
+      <div className="relative w-full">
+        <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-400" />
+        <input
+          type="text"
+          placeholder="Search by order/PO#, vendor, or item name..."
+          className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm bg-white"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
+      </div>
+
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead className="bg-slate-50 text-slate-600 font-medium border-b border-slate-200">
@@ -1281,7 +1348,7 @@ function ProcurementHistoryView({ currentUser, onEditOrder, showDeleted, fetchWi
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {orders.filter(order => showDeleted ? order.is_deleted : !order.is_deleted).map(order => (
+            {filteredOrders.map(order => (
               <React.Fragment key={order.order_number}>
                 <tr className="hover:bg-slate-50/50 transition-colors group cursor-pointer" onClick={() => setExpandedOrder(expandedOrder === order.order_number ? null : order.order_number)}>
                   <td className="px-4 py-3 font-medium text-slate-900">{order.order_number}</td>
@@ -1370,9 +1437,9 @@ function ProcurementHistoryView({ currentUser, onEditOrder, showDeleted, fetchWi
                 )}
               </React.Fragment>
             ))}
-            {orders.filter(order => showDeleted ? order.is_deleted : !order.is_deleted).length === 0 && (
+            {filteredOrders.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-500">No procurement history found.</td>
+                <td colSpan={7} className="px-4 py-8 text-center text-slate-500 font-medium">No matching procurement history found.</td>
               </tr>
             )}
           </tbody>
@@ -2328,7 +2395,7 @@ function SystemLogsSettingsView({ currentUser, fetchWithAuth }: { currentUser: a
 
   const fetchData = () => {
     Promise.all([
-      fetchWithAuth('/api/audit_logs').then((res: any) => res.json()),
+      fetchWithAuth('/api/logs').then((res: any) => res.json()),
       fetchWithAuth('/api/settings').then((res: any) => res.json())
     ]).then(([logsData, settingsData]) => {
       if (Array.isArray(logsData)) {
@@ -2487,8 +2554,10 @@ function SystemLogsSettingsView({ currentUser, fetchWithAuth }: { currentUser: a
             <tbody className="divide-y divide-slate-100">
               {logs.map(log => (
                 <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{new Date(log.timestamp).toLocaleString()}</td>
-                  <td className="px-4 py-3 font-medium text-slate-900">{log.user}</td>
+                  <td className="px-4 py-3 text-slate-500 whitespace-nowrap">
+                    {log.timestamp ? new Date(log.timestamp).toLocaleString() : log.created_at ? new Date(log.created_at).toLocaleString() : '-'}
+                  </td>
+                  <td className="px-4 py-3 font-medium text-slate-900">{log.username || log.user || 'System'}</td>
                   <td className="px-4 py-3 text-emerald-600 font-medium">{log.action}</td>
                   <td className="px-4 py-3 text-slate-600">{log.details}</td>
                   <td className="px-4 py-3">

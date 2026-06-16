@@ -265,6 +265,13 @@ async function startServer() {
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
+  app.get('/api/logs', authenticateToken, requireSuperAdmin, async (req, res) => {
+    try {
+      const snapshot = await db.collection('audit_logs').orderBy('timestamp', 'desc').limit(500).get();
+      res.json(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    } catch (error) { res.status(500).json({ error: String(error) }); }
+  });
+
   // --- USERS ---
   app.get('/api/users', authenticateToken, requireSuperAdmin, async (req, res) => {
     try {
