@@ -387,9 +387,6 @@ async function startServer() {
 
   app.get('/api/requests', authenticateToken, async (req: any, res) => {
     const role = req.user?.role;
-    const limit = parseInt(req.query.limit as string) || 50;
-    const startAfterId = req.query.startAfter as string;
-
     try {
       const snapshot = await db.collection('requests').get();
       let requests = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
@@ -397,15 +394,7 @@ async function startServer() {
         requests = requests.filter(r => r.is_deleted !== true);
       }
       requests.sort((a, b) => new Date(a.check_out_date || 0).getTime() - new Date(b.check_out_date || 0).getTime());
-
-      let result = requests;
-      if (startAfterId) {
-        const startIndex = requests.findIndex(r => r.id === startAfterId);
-        if (startIndex !== -1) {
-          result = requests.slice(startIndex + 1);
-        }
-      }
-      res.json(result.slice(0, limit));
+      res.json(requests);
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
@@ -500,9 +489,6 @@ async function startServer() {
   });
 
   app.get('/api/orders', authenticateToken, async (req: any, res) => {
-    const limit = parseInt(req.query.limit as string) || 50;
-    const startAfterId = req.query.startAfter as string;
-
     try {
       const snapshot = await db.collection('orders').get();
       let orders = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
@@ -510,15 +496,7 @@ async function startServer() {
         orders = orders.filter(order => order.is_deleted !== true);
       }
       orders.sort((a, b) => new Date(b.date_ordered || 0).getTime() - new Date(a.date_ordered || 0).getTime());
-
-      let result = orders;
-      if (startAfterId) {
-        const startIndex = orders.findIndex(o => o.id === startAfterId);
-        if (startIndex !== -1) {
-          result = orders.slice(startIndex + 1);
-        }
-      }
-      res.json(result.slice(0, limit));
+      res.json(orders);
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
@@ -784,8 +762,9 @@ async function startServer() {
       targetDate.setDate(targetDate.getDate() + 30);
       const targetDateStr = targetDate.toISOString();
 
-      const snapshot = await db.collection('recurring_templates').where('is_deleted', '==', false).get();
-      const templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+      const snapshot = await db.collection('recurring_templates').get();
+      let templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+      templates = templates.filter(temp => temp.is_deleted !== true);
       
       const dueTemplates = templates.filter(temp => temp.next_run_date && temp.next_run_date <= targetDateStr);
       
