@@ -121,7 +121,7 @@ const exportToCSV = (data: any[], filename: string) => {
 };
 
 export function StaffDashboard() {
-  const [activeTab, setActiveTab] = useState<'requests_active' | 'requests_history' | 'recurring' | 'inventory' | 'categories' | 'catalog' | 'procurement' | 'history' | 'users' | 'settings'>('requests_active');
+  const [activeTab, setActiveTab] = useState<'requests' | 'recurring' | 'inventory' | 'categories' | 'catalog' | 'procurement' | 'history' | 'users' | 'settings'>('requests');
   const [editingOrder, setEditingOrder] = useState<any>(null);
   const [showDeleted, setShowDeleted] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(() => {
@@ -225,8 +225,7 @@ export function StaffDashboard() {
       </div>
 
       <div className="flex gap-2 border-b border-slate-200 pb-px overflow-x-auto">
-        <TabButton active={activeTab === 'requests_active'} onClick={() => setActiveTab('requests_active')} icon={<ClipboardList className="w-4 h-4" />}>Active Requests</TabButton>
-        <TabButton active={activeTab === 'requests_history'} onClick={() => setActiveTab('requests_history')} icon={<History className="w-4 h-4" />}>Request History</TabButton>
+        <TabButton active={activeTab === 'requests'} onClick={() => setActiveTab('requests')} icon={<ClipboardList className="w-4 h-4" />}>Requests</TabButton>
         
         {(currentUser.role === 'admin' || currentUser.role === 'super_admin') && (
           <TabButton active={activeTab === 'recurring'} onClick={() => setActiveTab('recurring')} icon={<Calendar className="w-4 h-4" />}>Recurring Requests</TabButton>
@@ -253,8 +252,7 @@ export function StaffDashboard() {
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 min-h-[500px]">
         {activeTab === 'inventory' && <InventoryView currentUser={currentUser} fetchWithAuth={fetchWithAuth} />}
-        {activeTab === 'requests_active' && <RequestsView currentUser={currentUser} showDeleted={showDeleted} fetchWithAuth={fetchWithAuth} viewType="active" />}
-        {activeTab === 'requests_history' && <RequestsView currentUser={currentUser} showDeleted={showDeleted} fetchWithAuth={fetchWithAuth} viewType="history" />}
+        {activeTab === 'requests' && <RequestsView currentUser={currentUser} showDeleted={showDeleted} fetchWithAuth={fetchWithAuth} />}
         {activeTab === 'procurement' && <ProcurementView currentUser={currentUser} editOrder={editingOrder} onComplete={() => { setActiveTab('history'); setEditingOrder(null); }} fetchWithAuth={fetchWithAuth} />}
         {activeTab === 'history' && <ProcurementHistoryView currentUser={currentUser} showDeleted={showDeleted} onEditOrder={(order) => {
           setEditingOrder(order);
@@ -368,7 +366,7 @@ function InventoryView({ currentUser, fetchWithAuth }: { currentUser: any, fetch
   );
 }
 
-function RequestsView({ currentUser, showDeleted, fetchWithAuth, viewType }: { currentUser: any, showDeleted: boolean, fetchWithAuth: any, viewType: 'active' | 'history' }) {
+function RequestsView({ currentUser, showDeleted, fetchWithAuth }: { currentUser: any, showDeleted: boolean, fetchWithAuth: any }) {
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [requests, setRequests] = useState<Request[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -383,17 +381,11 @@ function RequestsView({ currentUser, showDeleted, fetchWithAuth, viewType }: { c
   const [hasMore, setHasMore] = useState(true);
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>(['Awaiting', 'Approved', 'Awaiting Pick Up', 'Checked-out']);
 
   const filteredRequests = requests
     .filter(req => showDeleted ? req.is_deleted : !req.is_deleted)
-    .filter(req => {
-      if (viewType === 'active') {
-        return ['Awaiting', 'Approved', 'Awaiting Pick Up', 'Checked-out'].includes(req.status);
-      } else if (viewType === 'history') {
-        return true; // History displays ALL requests (including 'Checked-in' and 'Denied')
-      }
-      return true;
-    })
+    .filter(req => selectedStatuses.includes(req.status))
     .filter(req => {
       if (!searchQuery) return true;
       const term = searchQuery.toLowerCase();
@@ -581,49 +573,11 @@ function RequestsView({ currentUser, showDeleted, fetchWithAuth, viewType }: { c
 
   return (
     <div className="space-y-6">
-      {viewType === 'active' ? (
-        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6 flex gap-4">
-          <HelpCircle className="w-6 h-6 text-blue-600 shrink-0 mt-0.5" />
-          <div className="space-y-3 flex-1">
-            <h3 className="font-bold text-blue-900 leading-none">Understanding Active Requests & Allocations</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
-              <p className="text-blue-800">
-                <strong className="block mb-1 text-blue-900">Awaiting:</strong>
-                New public requests. Temporarily locks inventory from the public form.
-              </p>
-              <p className="text-blue-800">
-                <strong className="block mb-1 text-blue-900">Approved (Soft Allocation):</strong>
-                Vetted and on the calendar. Items go back into the available pool for immediate use.
-              </p>
-              <p className="text-blue-800">
-                <strong className="block mb-1 text-blue-900">Awaiting Pick Up (Hard Allocation):</strong>
-                Use this 1–3 days before the event when you physically pack the box. This drops the Available-to-Promise inventory on the public form.
-              </p>
-              <p className="text-blue-800">
-                <strong className="block mb-1 text-blue-900">Checked-out:</strong>
-                The box has left the building. This permanently subtracts from your physical stock counts.
-              </p>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6 flex gap-4">
-          <HelpCircle className="w-6 h-6 text-blue-600 shrink-0 mt-0.5" />
-          <div className="space-y-3 flex-1">
-            <h3 className="font-bold text-blue-900 leading-none">Understanding Request History</h3>
-            <div className="text-sm text-blue-800 space-y-2">
-              <p>This is the immutable archive of all completed and closed workflows.</p>
-              <p>It contains all items that have been Checked-in (returned) or Denied.</p>
-              <p>Use the search bar to locate past tickets by requester name, department, or event name.</p>
-            </div>
-          </div>
-        </div>
-      )}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-4">
           <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
             <h2 className="text-xl font-semibold text-slate-900">
-              {viewType === 'active' ? 'Active Requests Queue' : 'Request History Log'}
+              Requests Queue
             </h2>
             <div className="flex flex-wrap gap-2">
               <button 
@@ -647,7 +601,7 @@ function RequestsView({ currentUser, showDeleted, fetchWithAuth, viewType }: { c
                 <Plus className="w-4 h-4" /> Add Historical Request
               </button>
               <button 
-                onClick={() => exportToCSV(requests.map(r => ({...r, line_items: JSON.stringify(r.line_items)})), 'requests.csv')}
+                onClick={() => exportToCSV(filteredRequests.map(r => ({...r, line_items: JSON.stringify(r.line_items)})), 'requests.csv')}
                 className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
               >
                 <Download className="w-4 h-4" /> Export to CSV
@@ -658,6 +612,30 @@ function RequestsView({ currentUser, showDeleted, fetchWithAuth, viewType }: { c
               >
                 <HelpCircle className="w-4 h-4" /> How to use this page
               </button>
+            </div>
+          </div>
+
+          {/* Status Multi-Select Checkbox Toggles */}
+          <div className="flex flex-wrap items-center gap-4 p-4 bg-slate-50 border border-slate-200 rounded-xl">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Filter Statuses:</span>
+            <div className="flex flex-wrap gap-x-4 gap-y-2">
+              {['Awaiting', 'Approved', 'Awaiting Pick Up', 'Checked-out', 'Checked-in', 'Denied'].map(status => (
+                <label key={status} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={selectedStatuses.includes(status)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedStatuses([...selectedStatuses, status]);
+                      } else {
+                        setSelectedStatuses(selectedStatuses.filter(s => s !== status));
+                      }
+                    }}
+                    className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span>{status}</span>
+                </label>
+              ))}
             </div>
           </div>
 
@@ -679,6 +657,7 @@ function RequestsView({ currentUser, showDeleted, fetchWithAuth, viewType }: { c
             <ul className="list-disc pl-5 space-y-2">
               <li><span className="bg-yellow-100 font-semibold px-1 rounded">Awaiting:</span> A brand new request. No action has been taken yet. Review it to see if we have enough inventory to fulfill it.</li>
               <li><span className="bg-blue-100 font-semibold px-1 rounded">Approved:</span> You have reviewed the request and set aside the items. <em>Action:</em> Changing the status to Approved will automatically email the requester telling them their items are ready for pickup!</li>
+              <li><span className="bg-sky-100 font-semibold px-1 rounded">Awaiting Pick Up:</span> Use this 1-3 days before the event when you physically pack the box. This drops the Available-to-Promise inventory on the public form.</li>
               <li><span className="bg-green-100 font-semibold px-1 rounded">Checked-out:</span> The person has physically picked up the items and left the building. <em>Action:</em> Changing to this status automatically subtracts the items from our inventory. If this causes an item to drop below its "Low Stock Threshold," the system will automatically email the team to reorder it.</li>
               <li><span className="bg-purple-100 font-semibold px-1 rounded">Checked-in:</span> The person has returned the items. <em>Action:</em> Changing to this status will automatically add reusable items back into our available inventory. Consumable items (like paper plates) will not be added back.</li>
               <li><span className="bg-red-100 font-semibold px-1 rounded">Denied:</span> We cannot fulfill the request. This restores the items to inventory if they were previously checked out.</li>
@@ -1097,9 +1076,6 @@ function ProcurementView({ currentUser, editOrder, onComplete, fetchWithAuth }: 
 
   return (
     <div className="space-y-6 max-w-3xl">
-      <div className="bg-blue-50 text-blue-800 p-4 rounded-xl text-sm border border-blue-100">
-        <strong className="font-semibold">Procurement Guide:</strong> Logging a new order automatically increases the Total Procured and Current Count for the category. If an item is part of a Kit, the system will automatically calculate the yield multiplier and distribute the inventory to the correct components. You may attach a PDF or image receipt for your records.
-      </div>
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-xl font-semibold text-slate-900">{editOrder ? 'Edit Order' : 'Log Incoming Order'}</h2>
         <button 
@@ -1112,6 +1088,7 @@ function ProcurementView({ currentUser, editOrder, onComplete, fetchWithAuth }: 
 
       <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} title="Procurement (Orders) Walkthrough">
         <p><strong>What is this page?</strong> This is where you tell the system that you bought new items to restock the library.</p>
+        <p className="mt-2 text-emerald-700 bg-emerald-50 p-2 rounded"><strong>Procurement Guide:</strong> Logging a new order automatically increases the Total Procured and Current Count for the category. If an item is part of a Kit, the system will automatically calculate the yield multiplier and distribute the inventory to the correct components. You may attach a PDF or image receipt for your records.</p>
         <h3 className="font-bold text-lg mt-4 text-blue-800">How to Log a Restock:</h3>
         <ol className="list-decimal pl-5 space-y-2">
           <li>Click <strong>Log Procurement</strong>.</li>
@@ -1720,10 +1697,6 @@ function CatalogView({ currentUser, showDeleted, fetchWithAuth }: { currentUser:
 
   return (
     <div className="space-y-6">
-      <div className="bg-blue-50 text-blue-800 p-4 rounded-xl text-sm border border-blue-100">
-        <strong className="font-semibold">Catalog & Inventory Guide:</strong> This tab manages the master list of requestable items.<br/>
-        <strong className="font-semibold">Automated Reorder Alerts:</strong> Reorder warning emails are triggered automatically when a request is moved to 'Checked-out' and the resulting inventory count drops below the 'Low Stock Threshold' set in the Categories tab.
-      </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <div className="space-y-4">
           <div className="flex justify-between items-center">
@@ -1752,6 +1725,7 @@ function CatalogView({ currentUser, showDeleted, fetchWithAuth }: { currentUser:
 
         <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} title="Catalog & Inventory Walkthrough">
           <p><strong>What is this page?</strong> This is the master database of every physical item the library offers. If an item does not exist here, it cannot be requested or ordered.</p>
+          <p className="mt-2 text-emerald-700 bg-emerald-50 p-2 rounded"><strong>Automated Reorder Alerts:</strong> Reorder warning emails are triggered automatically when a request is moved to 'Checked-out' and the resulting inventory count drops below the 'Low Stock Threshold' set in the Categories tab.</p>
           <h3 className="font-bold text-lg mt-4 text-blue-800">Key Terms You Need to Know:</h3>
           <ul className="list-disc pl-5 space-y-3">
             <li><strong>Pack Size:</strong> How many individual items come in a single box? For example, if you buy 1 box of compostable forks, and the box contains 50 forks, the Pack Size is 50. The system will automatically multiply your orders by this number.</li>
@@ -1974,6 +1948,7 @@ function CatalogView({ currentUser, showDeleted, fetchWithAuth }: { currentUser:
 }
 
 function CategoryManagementView({ fetchWithAuth }: { fetchWithAuth: any }) {
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | number | null>(null);
@@ -2039,37 +2014,13 @@ function CategoryManagementView({ fetchWithAuth }: { fetchWithAuth: any }) {
 
   return (
     <div className="space-y-6">
-      {/* Master Info Banner */}
-      <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6 flex gap-4">
-        <HelpCircle className="w-6 h-6 text-blue-600 shrink-0 mt-0.5" />
-        <div className="space-y-3">
-          <h3 className="font-bold text-blue-900 leading-none">Understanding Categories vs. Catalog</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
-            <p className="text-blue-800">
-              <strong className="block mb-1 text-blue-900">Categories (The Recipe):</strong>
-              Define the abstract types of items and the recipe for the pre-made kits on the public form.
-            </p>
-            <p className="text-blue-800">
-              <strong className="block mb-1 text-blue-900">Catalog (The Reality):</strong>
-              Defines the physical inventory you have in the warehouse. Edit the Kit Components (BOM) here to map a category to a specific box of inventory.
-            </p>
-          </div>
-          <div className="pt-4 border-t border-blue-100">
-            <h4 className="font-bold text-blue-900 text-sm mb-2">Form Fields Explained:</h4>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-xs text-blue-800">
-              <p>• <strong className="text-blue-900">Quantity per Pre-Made Kit:</strong> How many of this item go into a single pre-made set.</p>
-              <p>• <strong className="text-blue-900">Alert Threshold:</strong> Sends an email to staff when physical stock drops below this number.</p>
-              <p>• <strong className="text-blue-900">Visibility:</strong> Set to 'Internal Only' to hide this item from the public request form.</p>
-              <p>• <strong className="text-blue-900">Category Image:</strong> The photo displayed next to the item on the public form.</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-4">
           <div className="flex justify-between items-center">
             <h2 className="text-xl font-semibold text-slate-900">Categories & Kit yield Management</h2>
+            <button onClick={() => setIsHelpOpen(true)} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition-colors">
+              <HelpCircle className="w-4 h-4" /> How to use this page
+            </button>
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2190,11 +2141,26 @@ function CategoryManagementView({ fetchWithAuth }: { fetchWithAuth: any }) {
         </form>
       </div>
     </div>
+    <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} title="Categories & Kits Walkthrough">
+      <h3 className="font-bold text-lg text-blue-800">Understanding Categories vs. Catalog</h3>
+      <ul className="list-disc pl-5 space-y-3 mt-2">
+        <li><strong>Categories (The Recipe):</strong> Define the abstract types of items and the recipe for the pre-made kits on the public form.</li>
+        <li><strong>Catalog (The Reality):</strong> Defines the physical inventory you have in the warehouse. Edit the Kit Components (BOM) here to map a category to a specific box of inventory.</li>
+      </ul>
+      <h3 className="font-bold text-lg mt-4 text-blue-800">Form Fields Explained:</h3>
+      <ul className="list-disc pl-5 space-y-2 mt-2">
+        <li><strong>Quantity per Pre-Made Kit:</strong> How many of this item go into a single pre-made set.</li>
+        <li><strong>Alert Threshold:</strong> Sends an email to staff when physical stock drops below this number.</li>
+        <li><strong>Visibility:</strong> Set to 'Internal Only' to hide this item from the public request form.</li>
+        <li><strong>Category Image:</strong> The photo displayed next to the item on the public form.</li>
+      </ul>
+    </HelpModal>
     </div>
   );
 }
 
 function UserManagementView({ currentUser, fetchWithAuth }: { currentUser: any, fetchWithAuth: any }) {
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingUser, setEditingUser] = useState<any>(null);
@@ -2278,28 +2244,21 @@ function UserManagementView({ currentUser, fetchWithAuth }: { currentUser: any, 
 
   return (
     <div className="space-y-6">
-      {/* User Management Info Banner */}
-      <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6 flex gap-4">
-        <Users className="w-6 h-6 text-blue-600 shrink-0 mt-0.5" />
-        <div className="space-y-2">
-          <h3 className="font-bold text-blue-900 leading-none">Understanding User Roles</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-blue-800">
-            <p><strong className="text-blue-900">Super Admin:</strong> Full access to all system settings, user management, and email domain whitelists.</p>
-            <p><strong className="text-blue-900">Admin:</strong> Can manage catalog inventory, approve/deny public requests, and edit category recipes.</p>
-          </div>
-        </div>
-      </div>
-
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
       <div className="lg:col-span-2 space-y-4">
         <div className="flex justify-between items-center">
           <h2 className="text-xl font-semibold text-slate-900">Staff Accounts</h2>
-          <button 
-            onClick={() => exportToCSV(users, 'users.csv')}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
-          >
-            <Download className="w-4 h-4" /> Export to CSV
-          </button>
+          <div className="flex gap-2">
+            <button 
+              onClick={() => exportToCSV(users, 'users.csv')}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
+            >
+              <Download className="w-4 h-4" /> Export to CSV
+            </button>
+            <button onClick={() => setIsHelpOpen(true)} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition-colors">
+              <HelpCircle className="w-4 h-4" /> How to use this page
+            </button>
+          </div>
         </div>
         <div className="overflow-x-auto bg-white border border-slate-200 rounded-xl shadow-sm">
           <table className="w-full text-left text-sm">
@@ -2416,6 +2375,13 @@ function UserManagementView({ currentUser, fetchWithAuth }: { currentUser: any, 
         </form>
       </div>
     </div>
+    <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} title="User Management Walkthrough">
+      <p><strong>What is this page?</strong> Manage who has access to the staff dashboard.</p>
+      <ul className="list-disc pl-5 space-y-2">
+        <li><strong>Super Admin:</strong> Full access to system settings, user management, and the audit log.</li>
+        <li><strong>Admin:</strong> Day-to-day managers. Can approve requests, manage inventory, and edit categories.</li>
+      </ul>
+    </HelpModal>
     </div>
   );
 }
@@ -2494,18 +2460,6 @@ function SystemLogsSettingsView({ currentUser, fetchWithAuth }: { currentUser: a
 
   return (
     <div className="space-y-6">
-      {/* System Settings Info Banner */}
-      <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 flex gap-4">
-        <SettingsIcon className="w-6 h-6 text-emerald-600 shrink-0 mt-0.5" />
-        <div className="space-y-2">
-          <h3 className="font-bold text-emerald-900 leading-none">Understanding System Settings</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-emerald-800">
-            <p><strong className="text-emerald-900">Email Whitelist:</strong> Controls which county domains (e.g., @hawaiicounty.gov) are allowed to submit requests on the public form.</p>
-            <p><strong className="text-emerald-900">System Logs:</strong> An immutable, automated audit trail of all inventory changes, approvals, and system events.</p>
-          </div>
-        </div>
-      </div>
-
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-6">
           <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
@@ -2567,15 +2521,11 @@ function SystemLogsSettingsView({ currentUser, fetchWithAuth }: { currentUser: a
           </div>
 
         <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} title="System Roles & Settings Walkthrough">
-          <p><strong>What is this page?</strong> This handles system security, automated email triggers, and the master audit log.</p>
-          <h3 className="font-bold text-lg mt-4 text-blue-800">Security Roles Explained:</h3>
-          <ul className="list-disc pl-5 space-y-2">
-            <li><span className="font-bold">Super Admin:</span> Has god-mode access. Can edit backend email settings, create users, change roles, view the Recycle Bin, and permanently restore deleted records.</li>
-            <li><span className="font-bold">Admin:</span> Day-to-day managers. Can approve requests, log new inventory, and add new items to the catalog.</li>
-            <li><span className="font-bold">Audit / Staff:</span> Read-only access. They can view current inventory levels and read old requests, but they cannot approve requests, buy items, or change settings.</li>
+          <h3 className="font-bold text-lg text-blue-800">Understanding System Settings</h3>
+          <ul className="list-disc pl-5 space-y-3 mt-2">
+            <li><strong>Email Whitelist:</strong> Controls which county domains (e.g., @hawaiicounty.gov) are allowed to submit requests on the public form. Non-whitelisted domains will be blocked automatically.</li>
+            <li><strong>System Logs:</strong> An immutable, automated audit trail. Every single item checkout, check-in, order restock, or user permission change is logged here with a timestamp, username, and what changed.</li>
           </ul>
-          <h3 className="font-bold text-lg mt-4 text-blue-800">Email Config:</h3>
-          <p>This is where you tell the system who to email when a new request is submitted, or when inventory drops below the Low Stock Threshold. You can enter multiple email addresses by separating them with a comma.</p>
         </HelpModal>
 
         <div className="overflow-x-auto bg-white border border-slate-200 rounded-xl shadow-sm max-h-[600px] overflow-y-auto">
@@ -2671,6 +2621,7 @@ function SystemLogsSettingsView({ currentUser, fetchWithAuth }: { currentUser: a
 }
 
 export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [templates, setTemplates] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2794,33 +2745,14 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
 
   return (
     <div className="space-y-8">
-      {/* Master Info Banner */}
-      <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6 flex gap-4">
-        <HelpCircle className="w-6 h-6 text-blue-600 shrink-0 mt-0.5" />
-        <div className="space-y-3 flex-1">
-          <h3 className="font-bold text-blue-900 leading-none">Understanding Recurring Requests (The Spawner)</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-sm text-blue-800">
-            <p>
-              <strong className="block mb-1 text-blue-900">Templates:</strong>
-              Set up a recurring order (e.g., monthly) for partner agencies. This acts as a blueprint and does not impact today's inventory.
-            </p>
-            <p>
-              <strong className="block mb-1 text-blue-900">The 30-Day Spawner:</strong>
-              Every night, the system looks 30 days into the future. If a template is due, it automatically spawns an Approved ticket in the Active Requests tab.
-            </p>
-            <p>
-              <strong className="block mb-1 text-blue-900">Cancellation:</strong>
-              Deleting a template stops future spawns, but leaves existing tickets intact in your history logs.
-            </p>
-          </div>
-        </div>
-      </div>
-
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-xl font-semibold text-slate-900">Recurring Order Spawner Templates</h2>
           <p className="text-sm text-slate-500">Manage recurring order generation rules. Matching rules automatically spawn standard client requests with a 14-day lead-time.</p>
         </div>
+        <button onClick={() => setIsHelpOpen(true)} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition-colors shrink-0">
+          <HelpCircle className="w-4 h-4" /> How to use this page
+        </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -3000,6 +2932,14 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
           </form>
         </div>
       </div>
+      <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} title="Recurring Requests Walkthrough">
+        <h3 className="font-bold text-lg text-blue-800">Understanding Recurring Requests (The Spawner)</h3>
+        <ul className="list-disc pl-5 space-y-3 mt-2">
+          <li><strong>Templates:</strong> Set up a recurring order (e.g., monthly) for partner agencies. This acts as a blueprint and does not impact today's inventory.</li>
+          <li><strong>The 30-Day Spawner:</strong> Every night, the system looks 30 days into the future. If a template is due, it automatically spawns an Approved ticket in the Requests tab.</li>
+          <li><strong>Cancellation:</strong> Deleting a template stops future spawns, but leaves existing tickets intact in your history logs.</li>
+        </ul>
+      </HelpModal>
     </div>
   );
 }
