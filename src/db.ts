@@ -9,11 +9,11 @@ try {
   if (fs.existsSync(configPath)) {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     dbConfig.projectId = config.projectId;
-    dbConfig.databaseId = config.firestoreDatabaseId;
   }
 } catch (error) {
   console.error('Failed to load firebase-applet-config.json for server-side firestore:', error);
 }
+dbConfig.databaseId = '(default)'; // Force connection to the original database
 
 export const db = new Firestore(dbConfig);
 export { FieldValue };
