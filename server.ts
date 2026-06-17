@@ -260,15 +260,19 @@ async function startServer() {
 
   app.get('/api/audit_logs', authenticateToken, requireSuperAdmin, async (req, res) => {
     try {
-      const snapshot = await db.collection('audit_logs').orderBy('timestamp', 'desc').limit(500).get();
-      res.json(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const snapshot = await db.collection('audit_logs').get();
+      const logs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+      logs.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+      res.json(logs.slice(0, 500));
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
   app.get('/api/logs', authenticateToken, requireSuperAdmin, async (req, res) => {
     try {
-      const snapshot = await db.collection('audit_logs').orderBy('timestamp', 'desc').limit(500).get();
-      res.json(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const snapshot = await db.collection('audit_logs').get();
+      const logs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+      logs.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+      res.json(logs.slice(0, 500));
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
@@ -387,19 +391,21 @@ async function startServer() {
     const startAfterId = req.query.startAfter as string;
 
     try {
-      let query: any = db.collection('requests');
-      if (role !== 'super_admin') query = query.where('is_deleted', '==', false);
-      query = query.orderBy('check_out_date', 'asc');
+      const snapshot = await db.collection('requests').get();
+      let requests = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+      if (role !== 'super_admin') {
+        requests = requests.filter(r => r.is_deleted !== true);
+      }
+      requests.sort((a, b) => new Date(a.check_out_date || 0).getTime() - new Date(b.check_out_date || 0).getTime());
 
+      let result = requests;
       if (startAfterId) {
-        const startAfterDoc = await db.collection('requests').doc(startAfterId).get();
-        if (startAfterDoc.exists) {
-          query = query.startAfter(startAfterDoc);
+        const startIndex = requests.findIndex(r => r.id === startAfterId);
+        if (startIndex !== -1) {
+          result = requests.slice(startIndex + 1);
         }
       }
-
-      const snapshot = await query.limit(limit).get();
-      res.json(snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() })));
+      res.json(result.slice(0, limit));
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
@@ -498,19 +504,21 @@ async function startServer() {
     const startAfterId = req.query.startAfter as string;
 
     try {
-      let query: any = db.collection('orders');
-      if (req.user?.role !== 'super_admin') query = query.where('is_deleted', '==', false);
-      query = query.orderBy('date_ordered', 'desc');
+      const snapshot = await db.collection('orders').get();
+      let orders = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+      if (req.user?.role !== 'super_admin') {
+        orders = orders.filter(order => order.is_deleted !== true);
+      }
+      orders.sort((a, b) => new Date(b.date_ordered || 0).getTime() - new Date(a.date_ordered || 0).getTime());
 
+      let result = orders;
       if (startAfterId) {
-        const startAfterDoc = await db.collection('orders').doc(startAfterId).get();
-        if (startAfterDoc.exists) {
-          query = query.startAfter(startAfterDoc);
+        const startIndex = orders.findIndex(o => o.id === startAfterId);
+        if (startIndex !== -1) {
+          result = orders.slice(startIndex + 1);
         }
       }
-
-      const snapshot = await query.limit(limit).get();
-      res.json(snapshot.docs.map((doc:any) => ({ id: doc.id, ...doc.data() })));
+      res.json(result.slice(0, limit));
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
@@ -569,8 +577,9 @@ async function startServer() {
 
   app.get('/api/categories', async (req, res) => {
     try {
-      const requestsSnapshot = await db.collection('requests').where('is_deleted', '==', false).get();
+      const requestsSnapshot = await db.collection('requests').get();
       const activeRequests = requestsSnapshot.docs.map(doc => doc.data() as any)
+        .filter(r => r.is_deleted !== true)
         .filter(r => r.status === 'Awaiting' || r.status === 'Awaiting Pick Up');
 
       const reservedCounts: Record<string, number> = {};
@@ -585,24 +594,26 @@ async function startServer() {
         }
       }
 
-      let query: any = db.collection('categories').where('is_requestable', '==', 1);
-      const snapshot = await query.where('is_deleted', '==', false).get();
+      const snapshot = await db.collection('categories').get();
       const categories = snapshot.docs.map((doc: any) => {
         const cat = doc.data();
         const reserved_count = reservedCounts[doc.id] || 0;
         const available_to_promise = Math.max(0, (cat.current_count || 0) - reserved_count);
-        return { id: doc.id, ...cat, available_to_promise };
-      });
+        return { id: doc.id, ...cat, image_url: cat.image_url || '', available_to_promise };
+      })
+      .filter((cat: any) => cat.is_deleted !== true && cat.is_requestable === 1);
       res.json(categories);
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
   app.get('/api/items', authenticateToken, async (req: any, res) => {
     try {
-      let query: any = db.collection('inventory');
-      if (req.user?.role !== 'super_admin') query = query.where('is_deleted', '==', false);
-      const snapshot = await query.get();
-      res.json(snapshot.docs.map((doc:any) => ({ id: doc.id, ...doc.data() })));
+      const snapshot = await db.collection('inventory').get();
+      let items = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+      if (req.user?.role !== 'super_admin') {
+        items = items.filter(item => item.is_deleted !== true);
+      }
+      res.json(items);
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 
@@ -697,8 +708,9 @@ async function startServer() {
 
   app.get('/api/categories', async (req, res) => {
     try {
-      const requestsSnapshot = await db.collection('requests').where('is_deleted', '==', false).get();
+      const requestsSnapshot = await db.collection('requests').get();
       const activeRequests = requestsSnapshot.docs.map(doc => doc.data() as any)
+        .filter(r => r.is_deleted !== true)
         .filter(r => r.status === 'Awaiting' || r.status === 'Awaiting Pick Up');
 
       const reservedCounts: Record<string, number> = {};
@@ -713,13 +725,14 @@ async function startServer() {
         }
       }
 
-      const snapshot = await db.collection('categories').where('is_deleted', '==', false).get();
+      const snapshot = await db.collection('categories').get();
       const categories = snapshot.docs.map((doc: any) => {
         const cat = doc.data();
         const reserved_count = reservedCounts[doc.id] || 0;
         const available_to_promise = Math.max(0, (cat.current_count || 0) - reserved_count);
-        return { id: doc.id, ...cat, available_to_promise };
-      });
+        return { id: doc.id, ...cat, image_url: cat.image_url || '', available_to_promise };
+      })
+      .filter((cat: any) => cat.is_deleted !== true);
       res.json(categories);
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
@@ -727,8 +740,10 @@ async function startServer() {
   // --- RECURRING ORDERS (Templates-Spawner) ---
   app.get('/api/recurring', authenticateToken, requireAdmin, async (req: any, res) => {
     try {
-      const snapshot = await db.collection('recurring_templates').where('is_deleted', '==', false).get();
-      res.json(snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() })));
+      const snapshot = await db.collection('recurring_templates').get();
+      let templates = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+      templates = templates.filter(temp => temp.is_deleted !== true);
+      res.json(templates);
     } catch (error) { res.status(500).json({ error: String(error) }); }
   });
 

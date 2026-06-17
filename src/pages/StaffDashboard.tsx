@@ -2620,6 +2620,34 @@ function SystemLogsSettingsView({ currentUser, fetchWithAuth }: { currentUser: a
   );
 }
 
+const hawaiiCountyDepartments = [
+  "Animal Control and Protection Agency",
+  "Civil Defense Agency",
+  "Corporation Counsel",
+  "County Council",
+  "Department of Environmental Management",
+  "Department of Finance",
+  "Department of Human Resources",
+  "Department of Information Technology",
+  "Department of Liquor Control",
+  "Department of Parks and Recreation",
+  "Department of Planning",
+  "Department of Public Works",
+  "Department of Research and Development",
+  "Department of Water Supply",
+  "Elections Division",
+  "Fire Department",
+  "Mass Transit Agency",
+  "Mayor's Office",
+  "Office of Aging",
+  "Office of Housing and Community Development",
+  "Office of Sustainability, Climate, Equity, and Resilience (OSCER)",
+  "Office of the County Auditor",
+  "Office of the County Clerk",
+  "Office of the Prosecuting Attorney",
+  "Police Department"
+];
+
 export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [templates, setTemplates] = useState<any[]>([]);
@@ -2829,14 +2857,17 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
           <form onSubmit={handleCreateTemplate} className="space-y-4 text-sm text-slate-700">
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1">Department</label>
-              <input
-                type="text"
+              <select
                 required
                 value={department}
                 onChange={e => setDepartment(e.target.value)}
-                placeholder="e.g. Parks and Recreation"
-                className="w-full rounded border-slate-300 focus:border-emerald-500 focus:ring-emerald-500 text-sm px-3 py-2 bg-white border"
-              />
+                className="w-full rounded border-slate-300 focus:border-emerald-500 focus:ring-emerald-500 text-sm px-3 py-2 bg-white border cursor-pointer"
+              >
+                <option value="" disabled>Select a Department...</option>
+                {hawaiiCountyDepartments.map(dept => (
+                  <option key={dept} value={dept}>{dept}</option>
+                ))}
+              </select>
             </div>
 
             <div>
