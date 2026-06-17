@@ -581,9 +581,44 @@ function RequestsView({ currentUser, showDeleted, fetchWithAuth, viewType }: { c
 
   return (
     <div className="space-y-6">
-      <div className="bg-blue-50 text-blue-800 p-4 rounded-xl text-sm border border-blue-100">
-        <strong className="font-semibold">Workflow Guide:</strong> New requests start as Awaiting. Change to Approved to notify the user they can pick up the items. Change to Checked-out when items leave the building (this decreases inventory). Change to Checked-in when items are returned (this restores inventory for reusable items). Use Denied if the request cannot be fulfilled.
-      </div>
+      {viewType === 'active' ? (
+        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6 flex gap-4">
+          <HelpCircle className="w-6 h-6 text-blue-600 shrink-0 mt-0.5" />
+          <div className="space-y-3 flex-1">
+            <h3 className="font-bold text-blue-900 leading-none">Understanding Active Requests & Allocations</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
+              <p className="text-blue-800">
+                <strong className="block mb-1 text-blue-900">Awaiting:</strong>
+                New public requests. Temporarily locks inventory from the public form.
+              </p>
+              <p className="text-blue-800">
+                <strong className="block mb-1 text-blue-900">Approved (Soft Allocation):</strong>
+                Vetted and on the calendar. Items go back into the available pool for immediate use.
+              </p>
+              <p className="text-blue-800">
+                <strong className="block mb-1 text-blue-900">Awaiting Pick Up (Hard Allocation):</strong>
+                Use this 1–3 days before the event when you physically pack the box. This drops the Available-to-Promise inventory on the public form.
+              </p>
+              <p className="text-blue-800">
+                <strong className="block mb-1 text-blue-900">Checked-out:</strong>
+                The box has left the building. This permanently subtracts from your physical stock counts.
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6 flex gap-4">
+          <HelpCircle className="w-6 h-6 text-blue-600 shrink-0 mt-0.5" />
+          <div className="space-y-3 flex-1">
+            <h3 className="font-bold text-blue-900 leading-none">Understanding Request History</h3>
+            <div className="text-sm text-blue-800 space-y-2">
+              <p>This is the immutable archive of all completed and closed workflows.</p>
+              <p>It contains all items that have been Checked-in (returned) or Denied.</p>
+              <p>Use the search bar to locate past tickets by requester name, department, or event name.</p>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-4">
           <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
@@ -2759,6 +2794,28 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
 
   return (
     <div className="space-y-8">
+      {/* Master Info Banner */}
+      <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6 flex gap-4">
+        <HelpCircle className="w-6 h-6 text-blue-600 shrink-0 mt-0.5" />
+        <div className="space-y-3 flex-1">
+          <h3 className="font-bold text-blue-900 leading-none">Understanding Recurring Requests (The Spawner)</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-sm text-blue-800">
+            <p>
+              <strong className="block mb-1 text-blue-900">Templates:</strong>
+              Set up a recurring order (e.g., monthly) for partner agencies. This acts as a blueprint and does not impact today's inventory.
+            </p>
+            <p>
+              <strong className="block mb-1 text-blue-900">The 30-Day Spawner:</strong>
+              Every night, the system looks 30 days into the future. If a template is due, it automatically spawns an Approved ticket in the Active Requests tab.
+            </p>
+            <p>
+              <strong className="block mb-1 text-blue-900">Cancellation:</strong>
+              Deleting a template stops future spawns, but leaves existing tickets intact in your history logs.
+            </p>
+          </div>
+        </div>
+      </div>
+
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-xl font-semibold text-slate-900">Recurring Order Spawner Templates</h2>
