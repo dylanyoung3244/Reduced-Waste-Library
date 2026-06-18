@@ -726,18 +726,36 @@ async function startServer() {
   });
 
   app.post('/api/recurring', authenticateToken, requireAdmin, async (req: any, res) => {
-    const { department, event_name, frequency, next_run_date, line_items } = req.body;
+    const { department, event_name, frequency, next_run_date, line_items, is_stationed, ordinal, weekday } = req.body;
     try {
       const templateData = {
         department: department || '',
         event_name: event_name || '',
-        frequency: frequency || 'monthly',
+        frequency: frequency || 'monthly_exact',
         next_run_date: next_run_date || new Date().toISOString(),
         line_items: line_items || [],
+        is_stationed: is_stationed || false,
+        ordinal: ordinal || 'first',
+        weekday: weekday || '1',
         is_deleted: false,
         created_at: new Date().toISOString()
       };
+      
       const docRef = await db.collection('recurring_templates').add(templateData);
+      
+      if (templateData.is_stationed) {
+        for (const li of templateData.line_items) {
+          if (li.category_id) {
+            const catRef = db.collection('categories').doc(String(li.category_id));
+            const catDoc = await catRef.get();
+            if (catDoc.exists) {
+              const qty = Number(li.quantity) || 0;
+              await catRef.update({ current_count: FieldValue.increment(-qty) });
+            }
+          }
+        }
+      }
+
       await logAudit(req.user?.username, 'CREATED_RECURRING_TEMPLATE', `Created recurring template for ${department}`, { id: docRef.id, ...templateData });
       res.json({ success: true, id: docRef.id });
     } catch (error) { res.status(500).json({ error: String(error) }); }
@@ -795,7 +813,7 @@ async function startServer() {
           event_name: `Recurring: ${temp.event_name}`,
           check_out_date: checkOutStr,
           check_in_date: checkInStr,
-          status: 'Approved',
+          status: temp.is_stationed ? 'Stationed Usage' : 'Approved',
           is_deleted: false,
           is_recurring_instance: true,
           line_items: temp.line_items || []
@@ -803,11 +821,40 @@ async function startServer() {
 
         batch.set(newRequestRef, requestData);
 
-        // Update template's next run date by adding 1 month (if 'monthly') or 7 days (if 'weekly')
         const nextRun = new Date(temp.next_run_date);
         if (temp.frequency === 'weekly') {
           nextRun.setDate(nextRun.getDate() + 7);
+        } else if (temp.frequency === 'quarterly') {
+          nextRun.setMonth(nextRun.getMonth() + 3);
+        } else if (temp.frequency === 'annually') {
+          nextRun.setFullYear(nextRun.getFullYear() + 1);
+        } else if (temp.frequency === 'monthly_nth_weekday') {
+          nextRun.setMonth(nextRun.getMonth() + 1);
+          nextRun.setDate(1);
+          const targetWeekday = parseInt(temp.weekday) || 1;
+          const ord = temp.ordinal || 'first';
+          while (nextRun.getDay() !== targetWeekday) {
+            nextRun.setDate(nextRun.getDate() + 1);
+          }
+          let weeksToAdd = 0;
+          if (ord === 'second') weeksToAdd = 1;
+          else if (ord === 'third') weeksToAdd = 2;
+          else if (ord === 'fourth') weeksToAdd = 3;
+          else if (ord === 'last') {
+             const tempNext = new Date(nextRun);
+             while(true) {
+               tempNext.setDate(tempNext.getDate() + 7);
+               if (tempNext.getMonth() === nextRun.getMonth()) {
+                 nextRun.setDate(nextRun.getDate() + 7);
+               } else {
+                 break;
+               }
+             }
+             weeksToAdd = 0;
+          }
+          nextRun.setDate(nextRun.getDate() + (weeksToAdd * 7));
         } else {
+          // monthly_exact or default
           nextRun.setMonth(nextRun.getMonth() + 1);
         }
 

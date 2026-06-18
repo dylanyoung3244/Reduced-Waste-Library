@@ -381,7 +381,7 @@ function RequestsView({ currentUser, showDeleted, fetchWithAuth }: { currentUser
   const [hasMore, setHasMore] = useState(true);
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedStatuses, setSelectedStatuses] = useState<string[]>(['Awaiting', 'Approved', 'Awaiting Pick Up', 'Checked-out']);
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>(['Awaiting', 'Approved', 'Awaiting Pick Up', 'Checked-out', 'Stationed Usage']);
 
   const filteredRequests = requests
     .filter(req => showDeleted ? req.is_deleted : !req.is_deleted)
@@ -619,7 +619,7 @@ function RequestsView({ currentUser, showDeleted, fetchWithAuth }: { currentUser
           <div className="flex flex-wrap items-center gap-4 p-4 bg-slate-50 border border-slate-200 rounded-xl">
             <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Filter Statuses:</span>
             <div className="flex flex-wrap gap-x-4 gap-y-2">
-              {['Awaiting', 'Approved', 'Awaiting Pick Up', 'Checked-out', 'Checked-in', 'Denied'].map(status => (
+              {['Awaiting', 'Approved', 'Awaiting Pick Up', 'Checked-out', 'Checked-in', 'Denied', 'Stationed Usage'].map(status => (
                 <label key={status} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -696,6 +696,7 @@ function RequestsView({ currentUser, showDeleted, fetchWithAuth }: { currentUser
                     <option value="Checked-out">Checked-out</option>
                     <option value="Checked-in">Checked-in</option>
                     <option value="Denied">Denied</option>
+                    <option value="Stationed Usage">Stationed Usage</option>
                     <option value="Test">Test</option>
                   </select>
                   {expandedRequest === req.id ? <ChevronUp className="w-5 h-5 text-slate-400" /> : <ChevronDown className="w-5 h-5 text-slate-400" />}
@@ -867,6 +868,7 @@ function RequestsView({ currentUser, showDeleted, fetchWithAuth }: { currentUser
                     <option value="Checked-out">Checked-out</option>
                     <option value="Checked-in">Checked-in</option>
                     <option value="Denied">Denied</option>
+                    <option value="Stationed Usage">Stationed Usage</option>
                   </select>
                 </div>
               </div>
@@ -2658,9 +2660,12 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
   // New template form fields
   const [department, setDepartment] = useState('');
   const [eventName, setEventName] = useState('');
-  const [frequency, setFrequency] = useState<'weekly' | 'monthly'>('monthly');
+  const [frequency, setFrequency] = useState<'weekly' | 'monthly_exact' | 'monthly_nth_weekday' | 'quarterly' | 'annually'>('monthly_exact');
   const [nextRunDate, setNextRunDate] = useState('');
   const [lineItems, setLineItems] = useState<any[]>([]);
+  const [ordinal, setOrdinal] = useState('first');
+  const [weekday, setWeekday] = useState('1');
+  const [isStationed, setIsStationed] = useState(false);
 
   const fetchTemplatesAndCategories = async () => {
     try {
@@ -2749,16 +2754,22 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
           event_name: eventName,
           frequency,
           next_run_date: new Date(nextRunDate).toISOString(),
-          line_items: lineItems
+          line_items: lineItems,
+          is_stationed: isStationed,
+          ordinal,
+          weekday
         })
       });
 
       if (response.ok) {
         setDepartment('');
         setEventName('');
-        setFrequency('monthly');
+        setFrequency('monthly_exact');
         setNextRunDate('');
         setLineItems([]);
+        setIsStationed(false);
+        setOrdinal('first');
+        setWeekday('1');
         fetchTemplatesAndCategories();
       } else {
         alert('Failed to create recurring order template');
@@ -2886,12 +2897,65 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
               <label className="block text-xs font-semibold text-slate-600 mb-1">Frequency</label>
               <select
                 value={frequency}
-                onChange={e => setFrequency(e.target.value as 'weekly' | 'monthly')}
+                onChange={e => setFrequency(e.target.value as any)}
                 className="w-full rounded border-slate-300 focus:border-emerald-500 focus:ring-emerald-500 text-sm px-3 py-2 bg-white border"
               >
                 <option value="weekly">Weekly</option>
-                <option value="monthly">Monthly</option>
+                <option value="monthly_exact">Monthly (Exact Date)</option>
+                <option value="monthly_nth_weekday">Monthly (Nth Weekday)</option>
+                <option value="quarterly">Quarterly</option>
+                <option value="annually">Annually</option>
               </select>
+            </div>
+
+            {frequency === 'monthly_nth_weekday' && (
+              <div className="flex gap-4">
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Ordinal</label>
+                  <select
+                    value={ordinal}
+                    onChange={e => setOrdinal(e.target.value)}
+                    className="w-full rounded border-slate-300 focus:border-emerald-500 focus:ring-emerald-500 text-sm px-3 py-2 bg-white border"
+                  >
+                    <option value="first">First</option>
+                    <option value="second">Second</option>
+                    <option value="third">Third</option>
+                    <option value="fourth">Fourth</option>
+                    <option value="last">Last</option>
+                  </select>
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Weekday</label>
+                  <select
+                    value={weekday}
+                    onChange={e => setWeekday(e.target.value)}
+                    className="w-full rounded border-slate-300 focus:border-emerald-500 focus:ring-emerald-500 text-sm px-3 py-2 bg-white border"
+                  >
+                    <option value="0">Sunday</option>
+                    <option value="1">Monday</option>
+                    <option value="2">Tuesday</option>
+                    <option value="3">Wednesday</option>
+                    <option value="4">Thursday</option>
+                    <option value="5">Friday</option>
+                    <option value="6">Saturday</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            <div>
+              <label className="flex items-start gap-2 cursor-pointer mt-2">
+                <input 
+                  type="checkbox" 
+                  checked={isStationed}
+                  onChange={e => setIsStationed(e.target.checked)}
+                  className="mt-1 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                />
+                <div>
+                  <span className="block text-xs font-semibold text-slate-700">Items Relocated to Hub (Stationed)</span>
+                  <p className="text-[10px] text-slate-500">Checking this logs the inventory as permanently stationed off-site (e.g. Kona Hub). The cron job will spawn 'Stationed Usage' tickets instead of 'Approved' tickets, bypassing standard inventory subtraction.</p>
+                </div>
+              </label>
             </div>
 
             <div>

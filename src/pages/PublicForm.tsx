@@ -260,6 +260,13 @@ export function PublicForm() {
   const napkinsItem = inventory.find(i => i.name === 'Compostable Napkins' || (i as any).category_name === 'Compostable Napkins') as any;
   const napkinYield = napkinsItem && napkinsItem.kit_yield > 0 ? napkinsItem.kit_yield : 50;
 
+  const getMaxDate = () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 60);
+    return d.toISOString().split('T')[0];
+  };
+  const maxDate = getMaxDate();
+
   return (
     <div className="max-w-3xl mx-auto">
       <div className="mb-8">
@@ -350,8 +357,10 @@ export function PublicForm() {
                 name="check_out_date"
                 value={formData.check_out_date}
                 onChange={handleInputChange}
+                max={maxDate}
                 className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
               />
+              <p className="text-xs italic text-slate-500 mt-1">For requests more than 60 days in advance, please contact OSCER directly.</p>
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium text-slate-700">Check-in Date</label>
@@ -361,6 +370,7 @@ export function PublicForm() {
                 name="check_in_date"
                 value={formData.check_in_date}
                 onChange={handleInputChange}
+                max={maxDate}
                 className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
               />
             </div>
