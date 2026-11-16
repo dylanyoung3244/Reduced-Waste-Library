@@ -2193,87 +2193,29 @@ async function startServer(): Promise<void> {
             }
           });
 
-          const runDate = new Date(temp.next_run_date);
-          const checkOutStr = runDate.toISOString().split('T')[0];
-          const checkInDate = new Date(runDate.getTime() + 2 * 24 * 60 * 60 * 1000);
-          const checkInStr = checkInDate.toISOString().split('T')[0];
           const notifyEmail = settings.request_notification_email || 'oscer@hawaiicounty.gov';
           const spawnedIds: string[] = [];
+          const totalLifetimeIncrements = new Map<string, number>();
 
-          if (!temp.is_stationed) {
-            const reqRef = db.collection('requests').doc();
-            spawnedIds.push(reqRef.id);
-            tx.set(reqRef, {
-              requester_name: `Recurring - ${temp.department}`,
-              requester_email: notifyEmail,
-              requester_phone: '808-854-3129',
-              department: temp.department || 'Other',
-              event_name: `Recurring: ${temp.event_name}`,
-              check_out_date: checkOutStr,
-              check_in_date: checkInStr,
-              status: 'Approved',
-              is_deleted: false,
-              is_recurring_instance: true,
-              recurring_template_id: tplId,
-              created_at: new Date().toISOString(),
-              line_items: rawItems,
-            });
-          } else {
-            const reusableItems = rawItems.filter(
-              (li) => catTypeMap.get(String(li.category_id)) === 'reusable'
-            );
-            const consumableItems = rawItems.filter(
-              (li) => catTypeMap.get(String(li.category_id)) !== 'reusable'
-            );
-            const consumableMode = temp.consumable_mode || 'per_cycle';
+          let cursorIso: string = temp.next_run_date;
+          let cyclesSpawned = 0;
+          const MAX_CATCHUP_CYCLES = 6;
 
-            // 1. Log reusable cycle telemetry without deducting Hilo shelf stock
-            if (reusableItems.length > 0) {
-              const usageRef = db.collection('requests').doc();
-              spawnedIds.push(usageRef.id);
-              tx.set(usageRef, {
-                requester_name: `Stationed Hub - ${temp.department}`,
+          while (cursorIso <= targetDateStr && cyclesSpawned < MAX_CATCHUP_CYCLES) {
+            const runDate = new Date(cursorIso);
+            const checkOutStr = runDate.toISOString().split('T')[0];
+            const checkInDate = new Date(runDate.getTime() + 2 * 24 * 60 * 60 * 1000);
+            const checkInStr = checkInDate.toISOString().split('T')[0];
+
+            if (!temp.is_stationed) {
+              const reqRef = db.collection('requests').doc();
+              spawnedIds.push(reqRef.id);
+              tx.set(reqRef, {
+                requester_name: `Recurring - ${temp.department}`,
                 requester_email: notifyEmail,
                 requester_phone: '808-854-3129',
                 department: temp.department || 'Other',
-                event_name: `Stationed Hub Usage: ${temp.event_name}`,
-                check_out_date: checkOutStr,
-                check_in_date: checkInStr,
-                status: 'Stationed Usage',
-                is_deleted: false,
-                is_recurring_instance: true,
-                recurring_template_id: tplId,
-                created_at: new Date().toISOString(),
-                line_items: reusableItems,
-              });
-
-              const lifetimeIncrements = new Map<string, number>();
-              for (const li of reusableItems) {
-                const cid = String(li.category_id);
-                lifetimeIncrements.set(
-                  cid,
-                  (lifetimeIncrements.get(cid) || 0) + (Math.max(0, Number(li.quantity)) || 0)
-                );
-              }
-              for (const [cid, qty] of lifetimeIncrements.entries()) {
-                if (qty > 0 && catTypeMap.has(cid)) {
-                  tx.update(db.collection('categories').doc(cid), {
-                    total_checked_out: FieldValue.increment(qty),
-                  });
-                }
-              }
-            }
-
-            // 2. Spawn actionable Approved ticket ONLY for consumables needing shipment
-            if (consumableItems.length > 0 && consumableMode === 'per_cycle') {
-              const refillRef = db.collection('requests').doc();
-              spawnedIds.push(refillRef.id);
-              tx.set(refillRef, {
-                requester_name: `Hub Refill - ${temp.department}`,
-                requester_email: notifyEmail,
-                requester_phone: '808-854-3129',
-                department: temp.department || 'Other',
-                event_name: `Hub Consumable Refill: ${temp.event_name}`,
+                event_name: `Recurring: ${temp.event_name}`,
                 check_out_date: checkOutStr,
                 check_in_date: checkInStr,
                 status: 'Approved',
@@ -2281,30 +2223,96 @@ async function startServer(): Promise<void> {
                 is_recurring_instance: true,
                 recurring_template_id: tplId,
                 created_at: new Date().toISOString(),
-                line_items: consumableItems,
+                line_items: rawItems,
+              });
+            } else {
+              const reusableItems = rawItems.filter(
+                (li) => catTypeMap.get(String(li.category_id)) === 'reusable'
+              );
+              const consumableItems = rawItems.filter(
+                (li) => catTypeMap.get(String(li.category_id)) !== 'reusable'
+              );
+              const consumableMode = temp.consumable_mode || 'per_cycle';
+
+              if (reusableItems.length > 0) {
+                const usageRef = db.collection('requests').doc();
+                spawnedIds.push(usageRef.id);
+                tx.set(usageRef, {
+                  requester_name: `Stationed Hub - ${temp.department}`,
+                  requester_email: notifyEmail,
+                  requester_phone: '808-854-3129',
+                  department: temp.department || 'Other',
+                  event_name: `Stationed Hub Usage: ${temp.event_name}`,
+                  check_out_date: checkOutStr,
+                  check_in_date: checkInStr,
+                  status: 'Stationed Usage',
+                  is_deleted: false,
+                  is_recurring_instance: true,
+                  recurring_template_id: tplId,
+                  created_at: new Date().toISOString(),
+                  line_items: reusableItems,
+                });
+
+                for (const li of reusableItems) {
+                  const cid = String(li.category_id);
+                  totalLifetimeIncrements.set(
+                    cid,
+                    (totalLifetimeIncrements.get(cid) || 0) + (Math.max(0, Number(li.quantity)) || 0)
+                  );
+                }
+              }
+
+              if (consumableItems.length > 0 && consumableMode === 'per_cycle') {
+                const refillRef = db.collection('requests').doc();
+                spawnedIds.push(refillRef.id);
+                tx.set(refillRef, {
+                  requester_name: `Hub Refill - ${temp.department}`,
+                  requester_email: notifyEmail,
+                  requester_phone: '808-854-3129',
+                  department: temp.department || 'Other',
+                  event_name: `Hub Consumable Refill: ${temp.event_name}`,
+                  check_out_date: checkOutStr,
+                  check_in_date: checkInStr,
+                  status: 'Approved',
+                  is_deleted: false,
+                  is_recurring_instance: true,
+                  recurring_template_id: tplId,
+                  created_at: new Date().toISOString(),
+                  line_items: consumableItems,
+                });
+              }
+            }
+
+            const nextRun = calculateNextRecurringRunDate(
+              cursorIso,
+              temp.frequency,
+              temp.weekday,
+              temp.ordinal
+            );
+            cursorIso = nextRun.toISOString();
+            cyclesSpawned++;
+          }
+
+          for (const [cid, qty] of totalLifetimeIncrements.entries()) {
+            if (qty > 0 && catTypeMap.has(cid)) {
+              tx.update(db.collection('categories').doc(cid), {
+                total_checked_out: FieldValue.increment(qty),
               });
             }
           }
 
-          // Advance next_run_date cleanly past the current lookahead cycle
-          const nextRun = calculateNextRecurringRunDate(
-            temp.next_run_date,
-            temp.frequency,
-            temp.weekday,
-            temp.ordinal
-          );
-
           tx.update(tplRef, {
-            next_run_date: nextRun.toISOString(),
+            next_run_date: cursorIso,
           });
 
-          totalProcessed++;
+          totalProcessed += cyclesSpawned;
           auditMeta = {
             template_id: tplId,
+            cycles_spawned: cyclesSpawned,
             spawned_request_ids: spawnedIds,
             department: temp.department,
             event_name: temp.event_name,
-            next_run_date: nextRun.toISOString(),
+            next_run_date: cursorIso,
           };
         });
 
@@ -2312,7 +2320,7 @@ async function startServer(): Promise<void> {
           await logAudit(
             'System',
             'SPAWNED_RECURRING',
-            `Spawned recurring cycle for ${(auditMeta as any).department} (${(auditMeta as any).event_name})`,
+            `Spawned ${(auditMeta as any).cycles_spawned} cycle(s) for ${(auditMeta as any).department} (${(auditMeta as any).event_name})`,
             auditMeta
           );
         }
@@ -2447,6 +2455,7 @@ async function startServer(): Promise<void> {
             freq === 'on_demand' ? null : next_run_date || new Date().toISOString(),
           line_items: cleanItems,
           is_stationed: stationed,
+          stationed_schema_v2: true,
           consumable_mode: effectiveConsumableMode,
           ordinal: ordinal || 'first',
           weekday: weekday || '1',
@@ -2473,7 +2482,6 @@ async function startServer(): Promise<void> {
           });
 
           if (stationed) {
-            // Aggregate ONLY reusable items for upfront physical hub relocation
             const stationedReusables = new Map<string, number>();
             for (const li of cleanItems) {
               if (catTypeMap.get(li.category_id) === 'reusable') {
@@ -2498,7 +2506,6 @@ async function startServer(): Promise<void> {
               });
             }
 
-            // Optional Day-1 starter stash ticket when using Option B / Breakroom on-demand consumables
             const consumableItems = cleanItems.filter(
               (li) => catTypeMap.get(li.category_id) !== 'reusable'
             );
@@ -2538,7 +2545,6 @@ async function startServer(): Promise<void> {
           { id: newId, ...templateData }
         );
 
-        // Immediately spawn if the first run date is already within the 30-day window
         if (freq !== 'on_demand') {
           await runRecurringSpawner(true);
         }
@@ -2589,6 +2595,10 @@ async function startServer(): Promise<void> {
           if (!tplDoc.exists) throw new HttpError(404, 'Recurring template not found.');
 
           const existing = tplDoc.data() as any;
+          const isLegacyV1 =
+            Boolean(existing.is_stationed && !existing.is_deleted) &&
+            existing.stationed_schema_v2 !== true;
+
           const oldItems: any[] = existing.line_items || [];
           const allCatIds = Array.from(
             new Set(
@@ -2624,28 +2634,41 @@ async function startServer(): Promise<void> {
             return map;
           };
 
-          const oldMap = buildReusableMap(
+          const oldReusableMap = buildReusableMap(
             oldItems,
             Boolean(existing.is_stationed && !existing.is_deleted)
           );
           const newStationed = Boolean(is_stationed);
-          const newMap = buildReusableMap(cleanItems, newStationed);
+          const newReusableMap = buildReusableMap(cleanItems, newStationed);
 
+          // Reconcile reusable stationed counts + refund any legacy v1 consumable over-deductions
           for (const cid of allCatIds) {
             const catData = catDataMap.get(cid);
             if (!catData) continue;
-            const delta = (newMap.get(cid) || 0) - (oldMap.get(cid) || 0);
-            if (delta > 0 && (catData.current_count || 0) < delta) {
-              throw new HttpError(
-                409,
-                `Insufficient on-shelf stock for ${catData.name} to station ${delta} additional unit(s).`
-              );
-            }
-            if (delta !== 0) {
-              tx.update(db.collection('categories').doc(cid), {
-                current_count: FieldValue.increment(-delta),
-                currently_deployed: FieldValue.increment(delta),
-              });
+
+            if (catTypeMap.get(cid) === 'reusable') {
+              const delta = (newReusableMap.get(cid) || 0) - (oldReusableMap.get(cid) || 0);
+              if (delta > 0 && (catData.current_count || 0) < delta) {
+                throw new HttpError(
+                  409,
+                  `Insufficient on-shelf stock for ${catData.name} to station ${delta} additional unit(s).`
+                );
+              }
+              if (delta !== 0) {
+                tx.update(db.collection('categories').doc(cid), {
+                  current_count: FieldValue.increment(-delta),
+                  currently_deployed: FieldValue.increment(delta),
+                });
+              }
+            } else if (isLegacyV1) {
+              const legacyDeducted = oldItems
+                .filter((li) => String(li.category_id) === cid)
+                .reduce((sum, li) => sum + (Math.max(0, Number(li.quantity)) || 0), 0);
+              if (legacyDeducted > 0) {
+                tx.update(db.collection('categories').doc(cid), {
+                  current_count: FieldValue.increment(legacyDeducted),
+                });
+              }
             }
           }
 
@@ -2658,6 +2681,7 @@ async function startServer(): Promise<void> {
               freq === 'on_demand' ? null : next_run_date || existing.next_run_date,
             line_items: cleanItems,
             is_stationed: newStationed,
+            stationed_schema_v2: true,
             consumable_mode:
               freq === 'on_demand' ? 'on_demand' : consumable_mode || 'per_cycle',
             ordinal: ordinal || 'first',
@@ -2695,6 +2719,7 @@ async function startServer(): Promise<void> {
           if (tplData.is_deleted === true) return;
 
           if (tplData.is_stationed) {
+            const isLegacyV1 = tplData.stationed_schema_v2 !== true;
             const catIds = Array.from(
               new Set(
                 (tplData.line_items || [])
@@ -2711,24 +2736,37 @@ async function startServer(): Promise<void> {
               if (doc.exists) existingCatMap.set(catIds[idx], doc.data());
             });
 
-            const returnMap = new Map<string, number>();
+            const reusableReturnMap = new Map<string, number>();
+            const legacyConsumableReturnMap = new Map<string, number>();
+
             for (const li of tplData.line_items || []) {
               const cid = String(li?.category_id || '');
               const catData = existingCatMap.get(cid);
               if (!catData) continue;
+              const qty = Math.max(0, Number(li?.quantity)) || 0;
               if (inferCategoryItemType(catData.name, catData.item_type) === 'reusable') {
-                returnMap.set(
+                reusableReturnMap.set(cid, (reusableReturnMap.get(cid) || 0) + qty);
+              } else if (isLegacyV1) {
+                legacyConsumableReturnMap.set(
                   cid,
-                  (returnMap.get(cid) || 0) + (Math.max(0, Number(li?.quantity)) || 0)
+                  (legacyConsumableReturnMap.get(cid) || 0) + qty
                 );
               }
             }
 
-            for (const [cid, qty] of returnMap.entries()) {
+            for (const [cid, qty] of reusableReturnMap.entries()) {
               if (qty > 0) {
                 tx.update(db.collection('categories').doc(cid), {
                   current_count: FieldValue.increment(qty),
                   currently_deployed: FieldValue.increment(-qty),
+                });
+              }
+            }
+
+            for (const [cid, qty] of legacyConsumableReturnMap.entries()) {
+              if (qty > 0) {
+                tx.update(db.collection('categories').doc(cid), {
+                  current_count: FieldValue.increment(qty),
                 });
               }
             }
@@ -2740,7 +2778,7 @@ async function startServer(): Promise<void> {
         await logAudit(
           req.user?.username,
           'DELETED_RECURRING_TEMPLATE',
-          `Archived recurring template ${id} and reclaimed stationed reusables`,
+          `Archived recurring template ${id} and reclaimed stationed stock`,
           { id }
         );
         res.json({ success: true });

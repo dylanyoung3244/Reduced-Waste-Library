@@ -3722,6 +3722,7 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
   const [submitting, setSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const formCardRef = React.useRef<HTMLDivElement>(null);
 
   const [department, setDepartment] = useState('');
   const [eventName, setEventName] = useState('');
@@ -3810,12 +3811,13 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
     setEventName(entry.event_name || '');
     setFrequency(entry.frequency || 'monthly_exact');
     setNextRunDate(entry.next_run_date ? entry.next_run_date.split('T')[0] : '');
-    setLineItems(entry.line_items || []);
+    setLineItems((entry.line_items || []).map((li: any) => ({ ...li })));
     setIsStationed(Boolean(entry.is_stationed));
     setConsumableMode(entry.consumable_mode || 'per_cycle');
     setSpawnInitialStash(false);
     setOrdinal(entry.ordinal || 'first');
-    setWeekday(entry.weekday || '1');
+    setWeekday(String(entry.weekday ?? '1'));
+    formCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const handleCopyRefillLink = async (id: string) => {
@@ -3880,6 +3882,7 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
       });
       const data = await response.json();
       if (response.ok) {
+        alert(editingId ? 'Rule updated!' : 'Recurring rule created!');
         resetForm();
         fetchTemplatesAndCategories();
       } else {
@@ -3892,6 +3895,11 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
       setSubmitting(false);
     }
   };
+
+  const departmentOptions =
+    department && !hawaiiCountyDepartments.includes(department)
+      ? [department, ...hawaiiCountyDepartments]
+      : hawaiiCountyDepartments;
 
   return (
     <div className="space-y-8">
@@ -3941,8 +3949,14 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
                     {templates.map((entry) => {
                       const isPullMode =
                         entry.frequency === 'on_demand' || entry.consumable_mode === 'on_demand';
+                      const isBeingEdited = editingId === entry.id;
                       return (
-                        <tr key={entry.id} className="hover:bg-slate-50/50">
+                        <tr
+                          key={entry.id}
+                          className={`transition-colors ${
+                            isBeingEdited ? 'bg-blue-50/70' : 'hover:bg-slate-50/50'
+                          }`}
+                        >
                           <td className="py-3 px-3">
                             <div className="font-medium text-slate-900">{entry.event_name}</div>
                             <div className="text-xs text-slate-500">{entry.department}</div>
@@ -4029,18 +4043,18 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
                             <button
                               type="button"
                               onClick={() => handleEditTemplate(entry)}
-                              className="text-blue-600 hover:text-blue-800 p-1 rounded hover:bg-blue-50 transition-colors"
+                              className="text-xs font-medium text-blue-600 hover:text-blue-800 px-2 py-1 rounded hover:bg-blue-50 transition-colors inline-flex items-center gap-1"
                               title="Edit Rule"
                             >
-                              <Edit className="w-4 h-4 inline-block" />
+                              <Edit className="w-3.5 h-3.5" /> Edit
                             </button>
                             <button
                               type="button"
                               onClick={() => handleDeleteTemplate(entry.id)}
-                              className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50 transition-colors"
+                              className="text-xs font-medium text-red-600 hover:text-red-800 px-2 py-1 rounded hover:bg-red-50 transition-colors inline-flex items-center gap-1"
                               title="Archive Rule"
                             >
-                              <Trash2 className="w-4 h-4 inline-block" />
+                              <Trash2 className="w-3.5 h-3.5" /> Delete
                             </button>
                           </td>
                         </tr>
@@ -4053,16 +4067,23 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
           </div>
         </div>
 
-        <div className="bg-slate-50 rounded-xl p-5 border border-slate-200 h-fit space-y-4">
+        <div
+          ref={formCardRef}
+          className={`rounded-xl p-5 border h-fit space-y-4 transition-colors ${
+            editingId
+              ? 'bg-blue-50/40 border-blue-300 ring-2 ring-blue-100'
+              : 'bg-slate-50 border-slate-200'
+          }`}
+        >
           <div className="flex justify-between items-center">
-            <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wider">
-              {editingId ? 'Edit Rule / Hub' : 'Configure New Rule / Hub'}
+            <h3 className="text-sm font-semibold text-slate-800 uppercase tracking-wider">
+              {editingId ? 'Editing Selected Rule' : 'Configure New Rule / Hub'}
             </h3>
             {editingId && (
               <button
                 type="button"
                 onClick={resetForm}
-                className="text-xs text-slate-500 hover:text-slate-800"
+                className="text-xs font-medium text-blue-700 hover:text-blue-900"
               >
                 Cancel Edit
               </button>
@@ -4081,7 +4102,7 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
                 <option value="" disabled>
                   Select a Department...
                 </option>
-                {hawaiiCountyDepartments.map((dept) => (
+                {departmentOptions.map((dept) => (
                   <option key={dept} value={dept}>
                     {dept}
                   </option>
@@ -4243,7 +4264,7 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
               </div>
               {lineItems.length === 0 ? (
                 <p className="text-xs text-slate-500 italic">
-                  Click “+ Add Item” to configure reusables and/or consumables.
+                  Click "+ Add Item" to configure reusables and/or consumables.
                 </p>
               ) : (
                 <div className="space-y-2 border-t border-slate-200 pt-2 max-h-48 overflow-y-auto pr-1">
@@ -4291,7 +4312,11 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
             <button
               type="submit"
               disabled={submitting}
-              className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white font-medium py-2.5 rounded-xl text-sm transition-colors cursor-pointer mt-2"
+              className={`w-full text-white font-medium py-2.5 rounded-xl text-sm transition-colors cursor-pointer mt-2 ${
+                editingId
+                  ? 'bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400'
+                  : 'bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400'
+              }`}
             >
               {submitting
                 ? 'Saving...'
@@ -4310,23 +4335,23 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
       >
         <ul className="list-disc pl-5 space-y-2.5">
           <li>
-            <strong>Option A — Stationed Hub + Per-Cycle Consumables:</strong> Check{' '}
-            <em>Reusables Relocated Off-Site</em> and keep{' '}
-            <em>Send Per Cycle</em>. Reusables are deducted once upfront; 30 days before each
-            meeting, the system logs a <code>Stationed Usage</code> reuse credit for the reusables
-            and spawns a separate <code>Approved</code> ticket containing <strong>only</strong> the
-            consumables you need to pack and send.
+            <strong>Option A &mdash; Stationed Hub + Per-Cycle Consumables:</strong> Check{' '}
+            <em>Reusables Relocated Off-Site</em> and keep <em>Send Per Cycle</em>. Reusables are
+            deducted once upfront; 30 days before each meeting, the system logs a{' '}
+            <code>Stationed Usage</code> reuse credit for the reusables and spawns a separate{' '}
+            <code>Approved</code> ticket containing <strong>only</strong> the consumables you need
+            to pack and send.
           </li>
           <li>
-            <strong>Option B — Stationed Hub + Bulk Consumable Stash:</strong> Switch Consumable
-            Mode to <em>Bulk Stash at Hub</em>. Reusables still log cycle reuse, while consumables
-            wait until the hub uses their <strong>Refill Link</strong>.
+            <strong>Option B &mdash; Stationed Hub + Bulk Consumable Stash:</strong> Switch
+            Consumable Mode to <em>Bulk Stash at Hub</em>. Reusables still log cycle reuse, while
+            consumables wait until the hub uses their <strong>Refill Link</strong>.
           </li>
           <li>
-            <strong>Breakroom Kanban (QR Pull):</strong> Set Schedule to{' '}
-            <em>On-Demand Only</em>, click <strong>Refill Link</strong>, and turn that URL into a QR
-            code on the breakroom bin. Scanning it pre-fills the public request form with that
-            breakroom’s exact restock items.
+            <strong>Breakroom Kanban (QR Pull):</strong> Set Schedule to <em>On-Demand Only</em>,
+            click <strong>Refill Link</strong>, and turn that URL into a QR code on the breakroom
+            bin. Scanning it pre-fills the public request form with that breakroom's exact
+            restock items.
           </li>
         </ul>
       </HelpModal>

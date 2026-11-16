@@ -181,7 +181,7 @@ export function PublicForm() {
 
     if (name === 'check_out_date' || name === 'check_in_date') {
       if (value && isWeekendDateString(value)) {
-        setError('Check-out and check-in dates cannot fall on a weekend (Monday–Friday only).');
+        setError('Check-out and check-in dates cannot fall on a weekend (Monday-Friday only).');
         return;
       }
 
@@ -299,7 +299,7 @@ export function PublicForm() {
       isWeekendDateString(formData.check_out_date) ||
       isWeekendDateString(formData.check_in_date)
     ) {
-      setError('Check-out and check-in dates must fall on a weekday (Monday–Friday).');
+      setError('Check-out and check-in dates must fall on a weekday (Monday-Friday).');
       return;
     }
 
@@ -450,7 +450,7 @@ export function PublicForm() {
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Request Items</h1>
         <p className="text-slate-600 mt-2">
-          Reserve reusable and compostable event supplies from the County of Hawaiʻi Reduced Waste
+          Reserve reusable and compostable event supplies from the County of Hawai{'\u02BB'}i Reduced Waste
           Library.
         </p>
       </div>
@@ -561,7 +561,7 @@ export function PublicForm() {
                 className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
               />
               <p className="text-[11px] text-slate-500 italic mt-1 leading-tight">
-                Requires 2 business days notice (Mon–Fri). For events &gt;60 days out, contact OSCER
+                Requires 2 business days notice (Mon-Fri). For events &gt;60 days out, contact OSCER
                 directly.
               </p>
             </div>
