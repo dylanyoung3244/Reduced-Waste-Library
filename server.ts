@@ -202,6 +202,31 @@ function buildFootprintMap(
   return map;
 }
 
+function attachBulkPackHint(
+  li: { category_id: string | number; category_name: string; quantity: number; pack_hint?: string },
+  catData: any,
+  isBulkMode: boolean
+) {
+  if (!isBulkMode || !catData) return li;
+  const bulkSize = Number(catData.bulk_unit_size) || 0;
+  const qty = Math.max(0, Number(li.quantity) || 0);
+  if (bulkSize <= 0 || qty <= 0) return li;
+
+  const label = catData.bulk_unit_label || 'Box';
+  const fullBoxes = Math.floor(qty / bulkSize);
+  const remainder = qty % bulkSize;
+  const parts: string[] = [];
+
+  if (fullBoxes > 0) {
+    parts.push(`${fullBoxes}x ${label} (${fullBoxes * bulkSize})`);
+  }
+  if (remainder > 0) {
+    parts.push(`+${remainder} loose`);
+  }
+
+  return parts.length > 0 ? { ...li, pack_hint: parts.join(' ') } : li;
+}
+
 function calculateNextRecurringRunDate(
   currentRunIso: string,
   frequency: string,
@@ -2185,13 +2210,20 @@ async function startServer(): Promise<void> {
           ]);
 
           const settings = settingsDoc.data() || {};
+          const catDataMap = new Map<string, any>();
           const catTypeMap = new Map<string, CategoryItemType>();
           catDocs.forEach((doc, idx) => {
             if (doc.exists) {
               const d = doc.data()!;
+              catDataMap.set(catIds[idx], d);
               catTypeMap.set(catIds[idx], inferCategoryItemType(d.name, d.item_type));
             }
           });
+
+          const isBulkMode = Boolean(temp.is_bulk_refill);
+          const formattedAllItems = rawItems.map((li) =>
+            attachBulkPackHint(li, catDataMap.get(String(li.category_id)), isBulkMode)
+          );
 
           const notifyEmail = settings.request_notification_email || 'oscer@hawaiicounty.gov';
           const spawnedIds: string[] = [];
@@ -2223,13 +2255,13 @@ async function startServer(): Promise<void> {
                 is_recurring_instance: true,
                 recurring_template_id: tplId,
                 created_at: new Date().toISOString(),
-                line_items: rawItems,
+                line_items: formattedAllItems,
               });
             } else {
               const reusableItems = rawItems.filter(
                 (li) => catTypeMap.get(String(li.category_id)) === 'reusable'
               );
-              const consumableItems = rawItems.filter(
+              const consumableItems = formattedAllItems.filter(
                 (li) => catTypeMap.get(String(li.category_id)) !== 'reusable'
               );
               const consumableMode = temp.consumable_mode || 'per_cycle';
@@ -2363,9 +2395,10 @@ async function startServer(): Promise<void> {
       }
       const tpl = tplDoc.data() as any;
 
-      // If stationed, only pre-fill consumables (since reusables already live at the hub)
       const catIds = Array.from(
-        new Set((tpl.line_items || []).map((li: any) => String(li?.category_id || '')).filter(Boolean))
+        new Set(
+          (tpl.line_items || []).map((li: any) => String(li?.category_id || '')).filter(Boolean)
+        )
       ) as string[];
       const catDocs = await Promise.all(
         catIds.map((cid) => db.collection('categories').doc(cid).get())
@@ -2388,6 +2421,7 @@ async function startServer(): Promise<void> {
         department: tpl.department || '',
         event_name: tpl.event_name || '',
         is_stationed: Boolean(tpl.is_stationed),
+        is_bulk_refill: Boolean(tpl.is_bulk_refill),
         line_items: refillItems,
       });
     } catch (error) {
@@ -2420,6 +2454,7 @@ async function startServer(): Promise<void> {
         next_run_date,
         line_items,
         is_stationed,
+        is_bulk_refill,
         consumable_mode,
         spawn_initial_stash,
         ordinal,
@@ -2442,6 +2477,7 @@ async function startServer(): Promise<void> {
 
       const freq = frequency || 'monthly_exact';
       const stationed = Boolean(is_stationed);
+      const bulkMode = Boolean(is_bulk_refill);
       const effectiveConsumableMode =
         freq === 'on_demand' ? 'on_demand' : consumable_mode || 'per_cycle';
 
@@ -2455,6 +2491,7 @@ async function startServer(): Promise<void> {
             freq === 'on_demand' ? null : next_run_date || new Date().toISOString(),
           line_items: cleanItems,
           is_stationed: stationed,
+          is_bulk_refill: bulkMode,
           stationed_schema_v2: true,
           consumable_mode: effectiveConsumableMode,
           ordinal: ordinal || 'first',
@@ -2505,32 +2542,34 @@ async function startServer(): Promise<void> {
                 currently_deployed: FieldValue.increment(qty),
               });
             }
+          }
 
-            const consumableItems = cleanItems.filter(
-              (li) => catTypeMap.get(li.category_id) !== 'reusable'
-            );
-            if (
-              effectiveConsumableMode === 'on_demand' &&
-              Boolean(spawn_initial_stash) &&
-              consumableItems.length > 0
-            ) {
-              const todayStr = new Date().toISOString().split('T')[0];
-              const starterRef = db.collection('requests').doc();
-              tx.set(starterRef, {
-                requester_name: `Initial Hub Stash - ${templateData.department}`,
-                requester_email: settings.request_notification_email || 'oscer@hawaiicounty.gov',
-                requester_phone: '808-854-3129',
-                department: templateData.department,
-                event_name: `Initial Consumable Stash: ${templateData.event_name}`,
-                check_out_date: todayStr,
-                check_in_date: todayStr,
-                status: 'Approved',
-                is_deleted: false,
-                is_recurring_instance: true,
-                created_at: new Date().toISOString(),
-                line_items: consumableItems,
-              });
-            }
+          const consumableItems = cleanItems
+            .filter((li) => catTypeMap.get(li.category_id) !== 'reusable')
+            .map((li) => attachBulkPackHint(li, catDataMap.get(li.category_id), bulkMode));
+
+          if (
+            (stationed || freq === 'on_demand') &&
+            effectiveConsumableMode === 'on_demand' &&
+            Boolean(spawn_initial_stash) &&
+            consumableItems.length > 0
+          ) {
+            const todayStr = new Date().toISOString().split('T')[0];
+            const starterRef = db.collection('requests').doc();
+            tx.set(starterRef, {
+              requester_name: `Initial Stash - ${templateData.department}`,
+              requester_email: settings.request_notification_email || 'oscer@hawaiicounty.gov',
+              requester_phone: '808-854-3129',
+              department: templateData.department,
+              event_name: `Initial Consumable Stash: ${templateData.event_name}`,
+              check_out_date: todayStr,
+              check_in_date: todayStr,
+              status: 'Approved',
+              is_deleted: false,
+              is_recurring_instance: true,
+              created_at: new Date().toISOString(),
+              line_items: consumableItems,
+            });
           }
 
           const docRef = db.collection('recurring_templates').doc();
@@ -2569,6 +2608,7 @@ async function startServer(): Promise<void> {
         next_run_date,
         line_items,
         is_stationed,
+        is_bulk_refill,
         consumable_mode,
         ordinal,
         weekday,
@@ -2641,7 +2681,6 @@ async function startServer(): Promise<void> {
           const newStationed = Boolean(is_stationed);
           const newReusableMap = buildReusableMap(cleanItems, newStationed);
 
-          // Reconcile reusable stationed counts + refund any legacy v1 consumable over-deductions
           for (const cid of allCatIds) {
             const catData = catDataMap.get(cid);
             if (!catData) continue;
@@ -2681,6 +2720,7 @@ async function startServer(): Promise<void> {
               freq === 'on_demand' ? null : next_run_date || existing.next_run_date,
             line_items: cleanItems,
             is_stationed: newStationed,
+            is_bulk_refill: Boolean(is_bulk_refill),
             stationed_schema_v2: true,
             consumable_mode:
               freq === 'on_demand' ? 'on_demand' : consumable_mode || 'per_cycle',

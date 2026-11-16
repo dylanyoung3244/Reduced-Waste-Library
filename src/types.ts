@@ -122,7 +122,7 @@ export type RecurringTemplate = {
   next_run_date: string | null;
   line_items: RequestLineItem[];
   is_stationed: boolean;
-  stationed_schema_v2?: boolean;
+  is_bulk_refill?: boolean;
   consumable_mode?: ConsumableFulfillmentMode;
   ordinal?: string;
   weekday?: string;

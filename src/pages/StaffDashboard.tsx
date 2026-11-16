@@ -3734,6 +3734,7 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
   const [ordinal, setOrdinal] = useState('first');
   const [weekday, setWeekday] = useState('1');
   const [isStationed, setIsStationed] = useState(false);
+  const [isBulkRefill, setIsBulkRefill] = useState(false);
   const [consumableMode, setConsumableMode] = useState<'per_cycle' | 'on_demand'>('per_cycle');
   const [spawnInitialStash, setSpawnInitialStash] = useState(false);
 
@@ -3745,6 +3746,7 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
     setNextRunDate('');
     setLineItems([]);
     setIsStationed(false);
+    setIsBulkRefill(false);
     setConsumableMode('per_cycle');
     setSpawnInitialStash(false);
     setOrdinal('first');
@@ -3773,14 +3775,22 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
     fetchTemplatesAndCategories();
   }, []);
 
+  const getDefaultQtyForCategory = (cat: Category | undefined, bulkActive: boolean): number => {
+    if (bulkActive && cat?.bulk_unit_size && cat.bulk_unit_size > 0) {
+      return cat.bulk_unit_size;
+    }
+    return 25;
+  };
+
   const addLineItem = () => {
     if (categories.length > 0) {
+      const firstCat = categories[0];
       setLineItems([
         ...lineItems,
         {
-          category_id: categories[0].id,
-          category_name: categories[0].name,
-          quantity: 25,
+          category_id: firstCat.id,
+          category_name: firstCat.name,
+          quantity: getDefaultQtyForCategory(firstCat, isBulkRefill),
         },
       ]);
     }
@@ -3794,6 +3804,7 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
         ...updated[index],
         category_id: value,
         category_name: cat ? cat.name : 'Unknown',
+        quantity: getDefaultQtyForCategory(cat, isBulkRefill),
       };
     } else {
       updated[index] = { ...updated[index], [field]: value };
@@ -3805,6 +3816,23 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
     setLineItems(lineItems.filter((_, i) => i !== index));
   };
 
+  const handleToggleBulkRefill = (checked: boolean) => {
+    setIsBulkRefill(checked);
+    if (checked && lineItems.length > 0) {
+      // Snap existing consumable items up to 1 full box/sleeve if currently smaller
+      setLineItems(
+        lineItems.map((li) => {
+          const cat = categories.find((c) => String(c.id) === String(li.category_id));
+          if (cat && cat.item_type !== 'reusable' && cat.bulk_unit_size && cat.bulk_unit_size > 0) {
+            const boxes = Math.max(1, Math.round((Number(li.quantity) || 0) / cat.bulk_unit_size));
+            return { ...li, quantity: boxes * cat.bulk_unit_size };
+          }
+          return li;
+        })
+      );
+    }
+  };
+
   const handleEditTemplate = (entry: any) => {
     setEditingId(entry.id);
     setDepartment(entry.department || '');
@@ -3813,6 +3841,7 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
     setNextRunDate(entry.next_run_date ? entry.next_run_date.split('T')[0] : '');
     setLineItems((entry.line_items || []).map((li: any) => ({ ...li })));
     setIsStationed(Boolean(entry.is_stationed));
+    setIsBulkRefill(Boolean(entry.is_bulk_refill));
     setConsumableMode(entry.consumable_mode || 'per_cycle');
     setSpawnInitialStash(false);
     setOrdinal(entry.ordinal || 'first');
@@ -3874,8 +3903,10 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
           next_run_date: needsDate ? new Date(`${nextRunDate}T12:00:00Z`).toISOString() : null,
           line_items: lineItems,
           is_stationed: isStationed,
+          is_bulk_refill: isBulkRefill,
           consumable_mode: frequency === 'on_demand' ? 'on_demand' : consumableMode,
-          spawn_initial_stash: !editingId && isStationed && spawnInitialStash,
+          spawn_initial_stash:
+            !editingId && (isStationed || frequency === 'on_demand') && spawnInitialStash,
           ordinal,
           weekday,
         }),
@@ -3910,7 +3941,7 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
           </h2>
           <p className="text-sm text-slate-500">
             Automate 30-day lookahead commission orders, off-site stationed reusable kits, and
-            QR-code breakroom restock links.
+            bulk QR-code breakroom restock links.
           </p>
         </div>
         <button
@@ -3966,6 +3997,11 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
                                   Reusables Stationed
                                 </span>
                               )}
+                              {entry.is_bulk_refill && (
+                                <span className="text-[10px] bg-purple-50 text-purple-700 border border-purple-200 px-1.5 py-0.5 rounded font-semibold uppercase">
+                                  Bulk Box Mode
+                                </span>
+                              )}
                               {entry.is_stationed && entry.frequency !== 'on_demand' && (
                                 <span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded font-semibold uppercase">
                                   {entry.consumable_mode === 'on_demand'
@@ -3996,6 +4032,17 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
                                   (c) => String(c.id) === String(li.category_id)
                                 );
                                 const isReusable = cat?.item_type === 'reusable';
+                                const bulkSize = cat?.bulk_unit_size || 0;
+                                const boxHint =
+                                  entry.is_bulk_refill &&
+                                  !isReusable &&
+                                  bulkSize > 0 &&
+                                  li.quantity >= bulkSize
+                                    ? `${Math.floor(li.quantity / bulkSize)}x ${
+                                        cat?.bulk_unit_label || 'Box'
+                                      }`
+                                    : null;
+
                                 return (
                                   <div
                                     key={idx}
@@ -4011,6 +4058,11 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
                                     </span>
                                     <span className="font-semibold text-slate-800 shrink-0">
                                       x{li.quantity}
+                                      {boxHint && (
+                                        <span className="text-[10px] text-purple-600 font-normal ml-1">
+                                          ({boxHint})
+                                        </span>
+                                      )}
                                     </span>
                                   </div>
                                 );
@@ -4130,7 +4182,13 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
               </label>
               <select
                 value={frequency}
-                onChange={(e) => setFrequency(e.target.value as any)}
+                onChange={(e) => {
+                  const val = e.target.value as any;
+                  setFrequency(val);
+                  if (val === 'on_demand') {
+                    setIsBulkRefill(true);
+                  }
+                }}
                 className="w-full rounded-lg border-slate-300 focus:border-emerald-500 focus:ring-emerald-500 text-sm px-3 py-2 bg-white border"
               >
                 <option value="weekly">Weekly</option>
@@ -4181,20 +4239,40 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
               <label className="flex items-start gap-2 cursor-pointer">
                 <input
                   type="checkbox"
-                  checked={isStationed}
-                  onChange={(e) => setIsStationed(e.target.checked)}
-                  className="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                  checked={isBulkRefill}
+                  onChange={(e) => handleToggleBulkRefill(e.target.checked)}
+                  className="mt-0.5 rounded border-slate-300 text-purple-600 focus:ring-purple-500"
                 />
                 <div>
                   <span className="block text-xs font-semibold text-slate-800">
-                    Reusables Relocated Off-Site (Stationed Hub)
+                    Bulk Box / Sleeve Mode (is_bulk)
                   </span>
                   <p className="text-[11px] text-slate-500 leading-tight mt-0.5">
-                    Deducts <strong>only reusable</strong> items upfront while keeping consumables
-                    in Hilo inventory until replenished.
+                    Defaults quantities and QR Refill links to sealed boxes/sleeves (with A La Carte
+                    override if a breakroom needs fewer).
                   </p>
                 </div>
               </label>
+
+              <div className="border-t border-slate-100 pt-2.5">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isStationed}
+                    onChange={(e) => setIsStationed(e.target.checked)}
+                    className="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <div>
+                    <span className="block text-xs font-semibold text-slate-800">
+                      Reusables Relocated Off-Site (Stationed Hub)
+                    </span>
+                    <p className="text-[11px] text-slate-500 leading-tight mt-0.5">
+                      Deducts <strong>only reusable</strong> items upfront while keeping consumables
+                      in Hilo inventory until replenished.
+                    </p>
+                  </div>
+                </label>
+              </div>
 
               {isStationed && frequency !== 'on_demand' && (
                 <div className="pt-2 border-t border-slate-100 space-y-2">
@@ -4217,8 +4295,7 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
               )}
 
               {!editingId &&
-                isStationed &&
-                (frequency === 'on_demand' || consumableMode === 'on_demand') && (
+                (frequency === 'on_demand' || (isStationed && consumableMode === 'on_demand')) && (
                   <label className="flex items-center gap-2 cursor-pointer pt-1">
                     <input
                       type="checkbox"
@@ -4228,7 +4305,7 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
                     />
                     <span className="text-[11px] text-slate-600">
                       Also spawn an immediate <strong>Approved</strong> ticket for the initial
-                      consumable stash box today
+                      consumable stash today
                     </span>
                   </label>
                 )}
@@ -4252,7 +4329,7 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
             <div className="space-y-2">
               <div className="flex justify-between items-center">
                 <label className="block text-xs font-semibold text-slate-600">
-                  Template Line Items
+                  Template Line Items (Base Units)
                 </label>
                 <button
                   type="button"
@@ -4267,44 +4344,76 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
                   Click "+ Add Item" to configure reusables and/or consumables.
                 </p>
               ) : (
-                <div className="space-y-2 border-t border-slate-200 pt-2 max-h-48 overflow-y-auto pr-1">
-                  {lineItems.map((item, idx) => (
-                    <div key={idx} className="flex gap-2 items-center">
-                      <select
-                        value={item.category_id}
-                        onChange={(e) => updateLineItem(idx, 'category_id', e.target.value)}
-                        className="flex-1 rounded-lg border-slate-300 text-xs py-1.5 px-2 bg-white border text-slate-700"
-                      >
-                        {categories.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name} ({c.item_type === 'reusable' ? 'Reusable' : 'Consumable'})
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="number"
-                        min="1"
-                        required
-                        value={item.quantity}
-                        onChange={(e) =>
-                          updateLineItem(
-                            idx,
-                            'quantity',
-                            Math.max(1, parseInt(e.target.value, 10) || 1)
-                          )
-                        }
-                        className="w-16 rounded-lg border-slate-300 text-xs py-1.5 px-2 bg-white border text-slate-700"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => removeLineItem(idx)}
-                        className="text-slate-400 hover:text-red-600 p-1 transition-colors"
-                        title="Remove Item"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
+                <div className="space-y-2 border-t border-slate-200 pt-2 max-h-56 overflow-y-auto pr-1">
+                  {lineItems.map((item, idx) => {
+                    const selectedCat = categories.find(
+                      (c) => String(c.id) === String(item.category_id)
+                    );
+                    const boxSize = selectedCat?.bulk_unit_size || 0;
+                    const boxLabel = selectedCat?.bulk_unit_label || 'Box';
+                    return (
+                      <div key={idx} className="space-y-1 bg-white p-2 rounded-lg border border-slate-200">
+                        <div className="flex gap-2 items-center">
+                          <select
+                            value={item.category_id}
+                            onChange={(e) => updateLineItem(idx, 'category_id', e.target.value)}
+                            className="flex-1 rounded-lg border-slate-300 text-xs py-1.5 px-2 bg-white border text-slate-700"
+                          >
+                            {categories.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name} ({c.item_type === 'reusable' ? 'Reusable' : 'Consumable'})
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="number"
+                            min="1"
+                            required
+                            value={item.quantity}
+                            onChange={(e) =>
+                              updateLineItem(
+                                idx,
+                                'quantity',
+                                Math.max(1, parseInt(e.target.value, 10) || 1)
+                              )
+                            }
+                            className="w-20 rounded-lg border-slate-300 text-xs py-1.5 px-2 bg-white border text-slate-700"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeLineItem(idx)}
+                            className="text-slate-400 hover:text-red-600 p-1 transition-colors"
+                            title="Remove Item"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                        {boxSize > 0 && (
+                          <div className="flex justify-between items-center text-[10px] text-slate-500 px-1">
+                            <span>
+                              1 {boxLabel} = {boxSize} units
+                            </span>
+                            <div className="space-x-1.5">
+                              <button
+                                type="button"
+                                onClick={() => updateLineItem(idx, 'quantity', boxSize)}
+                                className="text-purple-600 hover:underline font-medium"
+                              >
+                                Set 1 {boxLabel}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => updateLineItem(idx, 'quantity', boxSize * 2)}
+                                className="text-purple-600 hover:underline font-medium"
+                              >
+                                2x
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -4331,27 +4440,23 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
       <HelpModal
         isOpen={isHelpOpen}
         onClose={() => setIsHelpOpen(false)}
-        title="Stationed Hubs & Breakroom Refill Modes"
+        title="Stationed Hubs, Bulk Boxes & Breakroom Refill Modes"
       >
         <ul className="list-disc pl-5 space-y-2.5">
           <li>
-            <strong>Option A &mdash; Stationed Hub + Per-Cycle Consumables:</strong> Check{' '}
-            <em>Reusables Relocated Off-Site</em> and keep <em>Send Per Cycle</em>. Reusables are
-            deducted once upfront; 30 days before each meeting, the system logs a{' '}
-            <code>Stationed Usage</code> reuse credit for the reusables and spawns a separate{' '}
-            <code>Approved</code> ticket containing <strong>only</strong> the consumables you need
-            to pack and send.
+            <strong>Bulk Box / Sleeve Mode:</strong> Pre-fills QR Refill links using whole
+            boxes/sleeves (configured per category in <em>Categories & Kits</em>) and stamps box
+            counts onto staff fulfillment tickets, while still allowing loose A La Carte overrides.
           </li>
           <li>
-            <strong>Option B &mdash; Stationed Hub + Bulk Consumable Stash:</strong> Switch
-            Consumable Mode to <em>Bulk Stash at Hub</em>. Reusables still log cycle reuse, while
-            consumables wait until the hub uses their <strong>Refill Link</strong>.
+            <strong>Option A &mdash; Stationed Hub + Per-Cycle Consumables:</strong> Deducts
+            reusables once upfront, logs cycle reuse via <code>Stationed Usage</code>, and spawns{' '}
+            <code>Approved</code> tickets only for consumables.
           </li>
           <li>
-            <strong>Breakroom Kanban (QR Pull):</strong> Set Schedule to <em>On-Demand Only</em>,
-            click <strong>Refill Link</strong>, and turn that URL into a QR code on the breakroom
-            bin. Scanning it pre-fills the public request form with that breakroom's exact
-            restock items.
+            <strong>Breakroom Kanban (QR Pull):</strong> Set Schedule to <em>On-Demand Only</em>{' '}
+            (auto-enables Bulk Box mode), copy the <strong>Refill Link</strong>, and print a QR code
+            for the breakroom bin.
           </li>
         </ul>
       </HelpModal>

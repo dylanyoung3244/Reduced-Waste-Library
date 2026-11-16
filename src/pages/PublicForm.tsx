@@ -86,6 +86,7 @@ export function PublicForm() {
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
   const [refillBanner, setRefillBanner] = useState('');
+  const [isBulkRefillMode, setIsBulkRefillMode] = useState(false);
 
   const [formData, setFormData] = useState({
     requester_name: '',
@@ -127,6 +128,9 @@ export function PublicForm() {
             if (tplRes.ok) {
               const tpl = await tplRes.json();
               const nextWeekday = formatLocalDate(addBusinessDays(new Date(), 2));
+              const bulkMode = Boolean(tpl.is_bulk_refill);
+              setIsBulkRefillMode(bulkMode);
+
               setFormData((prev) => ({
                 ...prev,
                 department: tpl.department || prev.department,
@@ -136,20 +140,41 @@ export function PublicForm() {
               }));
 
               const prefilledQty: Record<string, number> = {};
+              const prefilledBoxes: Record<string, number> = {};
+
               for (const li of tpl.line_items || []) {
                 const matchedCat = cats.find((c) => String(c.id) === String(li.category_id));
                 if (!matchedCat) continue;
-                const step = matchedCat.name === 'Reusable Water Jugs' ? 1 : 10;
+
                 const available =
                   matchedCat.available_to_promise ?? matchedCat.current_count ?? 0;
-                const rounded = Math.ceil((Number(li.quantity) || 0) / step) * step;
-                const maxStepAligned =
-                  step > 1 ? Math.floor(available / step) * step : available;
-                prefilledQty[matchedCat.id] = Math.min(rounded, Math.max(0, maxStepAligned));
+                const requestedUnits = Math.min(Math.max(0, Number(li.quantity) || 0), available);
+                const boxSize = matchedCat.bulk_unit_size || 0;
+                const step = matchedCat.name === 'Reusable Water Jugs' ? 1 : 10;
+
+                if (bulkMode && boxSize > 0 && requestedUnits >= boxSize) {
+                  const boxes = Math.floor(requestedUnits / boxSize);
+                  const remainder = requestedUnits - boxes * boxSize;
+                  prefilledBoxes[matchedCat.id] = boxes;
+                  if (remainder > 0) {
+                    const alignedRem =
+                      step > 1 ? Math.floor(remainder / step) * step : remainder;
+                    if (alignedRem > 0) prefilledQty[matchedCat.id] = alignedRem;
+                  }
+                } else {
+                  const rounded = Math.ceil(requestedUnits / step) * step;
+                  const maxStepAligned =
+                    step > 1 ? Math.floor(available / step) * step : available;
+                  prefilledQty[matchedCat.id] = Math.min(rounded, Math.max(0, maxStepAligned));
+                }
               }
+
+              setBulkBoxes(prefilledBoxes);
               setQuantities(prefilledQty);
               setRefillBanner(
-                `Pre-filled consumable restock for "${tpl.event_name}". Adjust quantities below if needed.`
+                bulkMode
+                  ? `Bulk Box Restock pre-filled for "${tpl.event_name}". Adjust box counts (or switch to A La Carte for smaller loose quantities) below.`
+                  : `Pre-filled consumable restock for "${tpl.event_name}". Adjust quantities below if needed.`
               );
             }
           } catch (e) {
@@ -368,6 +393,7 @@ export function PublicForm() {
 
       setSuccess(true);
       setRefillBanner('');
+      setIsBulkRefillMode(false);
       setFormData({
         requester_name: '',
         requester_email: '',
@@ -587,7 +613,7 @@ export function PublicForm() {
             Select Items
           </h2>
 
-          {kitComponents.length > 0 && (
+          {kitComponents.length > 0 && !isBulkRefillMode && (
             <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-5 mb-6">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>

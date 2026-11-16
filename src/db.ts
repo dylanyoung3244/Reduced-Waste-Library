@@ -35,6 +35,15 @@ export function inferCategoryItemType(name?: string, explicitType?: string): Cat
   return (name || '').toLowerCase().includes('reusable') ? 'reusable' : 'consumable';
 }
 
+const DEFAULT_BULK_SPECS: Record<string, { label: string; size: number }> = {
+  'Compostable Plates': { label: 'Sleeve', size: 125 },
+  'Compostable Forks': { label: 'Box', size: 140 },
+  'Compostable Knives': { label: 'Box', size: 120 },
+  'Compostable Spoons': { label: 'Box', size: 120 },
+  'Compostable Napkins': { label: 'Sleeve', size: 250 },
+  'Compostable Chopsticks': { label: 'Box', size: 200 },
+};
+
 export async function initDb(): Promise<void> {
   try {
     const usersSnapshot = await db.collection('users').limit(1).get();
@@ -45,7 +54,7 @@ export async function initDb(): Promise<void> {
 
       if (!process.env['INITIAL_ADMIN_PASSWORD']) {
         console.warn(
-          `[BOOTSTRAP] Seeded initial staff users with generated password: ${bootstrapPassword} — rotate immediately in Staff Dashboard.`
+          `[BOOTSTRAP] Seeded initial staff users with generated password: ${bootstrapPassword} - rotate immediately in Staff Dashboard.`
         );
       }
 
@@ -110,6 +119,7 @@ export async function initDb(): Promise<void> {
       const catBatch = db.batch();
       for (const cat of defaultCategories) {
         const ref = db.collection('categories').doc();
+        const bulkSpec = DEFAULT_BULK_SPECS[cat.name] || { label: '', size: 0 };
         catBatch.set(ref, {
           name: cat.name,
           item_type: cat.item_type,
@@ -120,15 +130,15 @@ export async function initDb(): Promise<void> {
           total_checked_out: 0,
           currently_deployed: 0,
           low_stock_threshold: 100,
-          bulk_unit_label: '',
-          bulk_unit_size: 0,
+          bulk_unit_label: bulkSpec.label,
+          bulk_unit_size: bulkSpec.size,
           is_deleted: false,
         });
       }
       await catBatch.commit();
     }
 
-    // Idempotent schema migration: backfill item_type & currently_deployed on existing categories
+    // Idempotent schema migration: backfill item_type, currently_deployed, and default bulk box sizes
     const allCategoriesSnapshot = await db.collection('categories').get();
     const categoryMap: Record<string, string> = {};
     const migrationBatch = db.batch();
@@ -145,6 +155,12 @@ export async function initDb(): Promise<void> {
       if (typeof data.currently_deployed !== 'number') {
         updates.currently_deployed = 0;
       }
+      const defaultBulk = DEFAULT_BULK_SPECS[data.name];
+      if (defaultBulk && (!data.bulk_unit_size || Number(data.bulk_unit_size) === 0)) {
+        updates.bulk_unit_label = data.bulk_unit_label || defaultBulk.label;
+        updates.bulk_unit_size = defaultBulk.size;
+      }
+
       if (Object.keys(updates).length > 0) {
         migrationBatch.update(doc.ref, updates);
         migrationCount++;
@@ -153,7 +169,7 @@ export async function initDb(): Promise<void> {
 
     if (migrationCount > 0) {
       await migrationBatch.commit();
-      console.log(`Migrated ${migrationCount} category document(s) with explicit item_type.`);
+      console.log(`Migrated ${migrationCount} category document(s) with bulk specs / item_type.`);
     }
 
     const inventorySnapshot = await db.collection('inventory').limit(1).get();
@@ -245,7 +261,9 @@ export async function initDb(): Promise<void> {
           total_checked_out: 0,
           reorder_url: 'https://www.walmart.com/search?q=Bamboo+Chopsticks',
           is_deleted: false,
-          kit_components: [{ category_id: categoryMap['Compostable Chopsticks'], yield_multiplier: 1 }],
+          kit_components: [
+            { category_id: categoryMap['Compostable Chopsticks'], yield_multiplier: 1 },
+          ],
         },
         {
           item_number: '180657001848',
@@ -259,7 +277,9 @@ export async function initDb(): Promise<void> {
           total_checked_out: 0,
           reorder_url: 'https://www.amazon.com/s?k=Gallon+Long+Term+Water+Storage',
           is_deleted: false,
-          kit_components: [{ category_id: categoryMap['Reusable Water Jugs'], yield_multiplier: 1 }],
+          kit_components: [
+            { category_id: categoryMap['Reusable Water Jugs'], yield_multiplier: 1 },
+          ],
         },
       ];
 
