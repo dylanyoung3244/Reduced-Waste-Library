@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { InventoryItem } from '../types';
 import { CheckCircle2, AlertCircle, Package } from 'lucide-react';
 
@@ -80,12 +81,17 @@ function addBusinessDays(startDate: Date, businessDays: number): Date {
 }
 
 export function PublicForm() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const refillParam =
+    searchParams.get('refill') || new URLSearchParams(window.location.search).get('refill');
+
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
   const [refillBanner, setRefillBanner] = useState('');
+  const [isRefillSession, setIsRefillSession] = useState(Boolean(refillParam));
   const [isBulkRefillMode, setIsBulkRefillMode] = useState(false);
 
   const [formData, setFormData] = useState({
@@ -113,18 +119,24 @@ export function PublicForm() {
         }
       })
       .catch((err) => console.error('Failed to load allowed domains:', err));
+  }, []);
 
-    const refillId = new URLSearchParams(window.location.search).get('refill');
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
 
     fetch('/api/categories')
       .then((res) => res.json())
       .then(async (data) => {
+        if (cancelled) return;
         const cats: InventoryItem[] = Array.isArray(data) ? data : [];
         setInventory(cats);
 
-        if (refillId) {
+        if (refillParam) {
+          setIsRefillSession(true);
+          setSetsRequested(0);
           try {
-            const tplRes = await fetch(`/api/public/refill/${encodeURIComponent(refillId)}`);
+            const tplRes = await fetch(`/api/public/refill/${encodeURIComponent(refillParam)}`);
             if (tplRes.ok) {
               const tpl = await tplRes.json();
               const nextWeekday = formatLocalDate(addBusinessDays(new Date(), 2));
@@ -171,25 +183,53 @@ export function PublicForm() {
 
               setBulkBoxes(prefilledBoxes);
               setQuantities(prefilledQty);
+              setError('');
               setRefillBanner(
                 bulkMode
-                  ? `Bulk Box Restock pre-filled for "${tpl.event_name}". Adjust box counts (or switch to A La Carte for smaller loose quantities) below.`
+                  ? `Bulk Box Restock pre-filled for "${tpl.event_name}". Adjust box counts (or use A La Carte for smaller loose quantities) below.`
                   : `Pre-filled consumable restock for "${tpl.event_name}". Adjust quantities below if needed.`
+              );
+            } else {
+              setIsRefillSession(false);
+              setIsBulkRefillMode(false);
+              setError(
+                'This QR Refill link is invalid, archived, or belongs to a different environment. Showing the standard request form instead.'
               );
             }
           } catch (e) {
             console.error('Failed to load refill template:', e);
+            setIsRefillSession(false);
+            setIsBulkRefillMode(false);
           }
+        } else {
+          setIsRefillSession(false);
+          setIsBulkRefillMode(false);
+          setRefillBanner('');
         }
 
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       })
       .catch((err) => {
         console.error(err);
-        setError('Failed to load available library items.');
-        setLoading(false);
+        if (!cancelled) {
+          setError('Failed to load available library items.');
+          setLoading(false);
+        }
       });
-  }, []);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refillParam]);
+
+  const handleExitRefillMode = () => {
+    setIsRefillSession(false);
+    setIsBulkRefillMode(false);
+    setRefillBanner('');
+    setQuantities({});
+    setBulkBoxes({});
+    setSearchParams({});
+  };
 
   const today = new Date();
   const minCheckOutDateString = formatLocalDate(addBusinessDays(today, 2));
@@ -206,7 +246,7 @@ export function PublicForm() {
 
     if (name === 'check_out_date' || name === 'check_in_date') {
       if (value && isWeekendDateString(value)) {
-        setError('Check-out and check-in dates cannot fall on a weekend (Monday-Friday only).');
+        setError('Check-out and check-in dates cannot fall on a weekend (Monday\u2013Friday only).');
         return;
       }
 
@@ -263,8 +303,9 @@ export function PublicForm() {
       num = Math.round(num / step) * step;
     }
 
+    const activeSets = isRefillSession ? 0 : setsRequested;
     const otherAllocated =
-      setsRequested * (item.kit_yield || 0) +
+      activeSets * (item.kit_yield || 0) +
       (bulkBoxes[item.id] || 0) * (item.bulk_unit_size || 0);
     const remainingMax = Math.max(0, availableCount - otherAllocated);
     const clampedMax = step > 1 ? Math.floor(remainingMax / step) * step : remainingMax;
@@ -279,20 +320,22 @@ export function PublicForm() {
 
   const getTotalQuantity = (item: InventoryItem): number => {
     const aLaCarte = quantities[item.id] || 0;
+    const activeSets = isRefillSession ? 0 : setsRequested;
     const setYield = item.kit_yield || 0;
     const boxUnits = (bulkBoxes[item.id] || 0) * (item.bulk_unit_size || 0);
-    return aLaCarte + setsRequested * setYield + boxUnits;
+    return aLaCarte + activeSets * setYield + boxUnits;
   };
 
   const buildPackHint = (item: InventoryItem): string | undefined => {
     const parts: string[] = [];
+    const activeSets = isRefillSession ? 0 : setsRequested;
     const kitYield = item.kit_yield || 0;
     const boxes = bulkBoxes[item.id] || 0;
     const boxSize = item.bulk_unit_size || 0;
     const aLaCarte = quantities[item.id] || 0;
 
-    if (setsRequested > 0 && kitYield > 0) {
-      parts.push(`${setsRequested}x Kit (${setsRequested * kitYield})`);
+    if (activeSets > 0 && kitYield > 0) {
+      parts.push(`${activeSets}x Kit (${activeSets * kitYield})`);
     }
     if (boxes > 0 && boxSize > 0) {
       parts.push(`${boxes}x ${item.bulk_unit_label || 'Box'} (${boxes * boxSize})`);
@@ -324,7 +367,7 @@ export function PublicForm() {
       isWeekendDateString(formData.check_out_date) ||
       isWeekendDateString(formData.check_in_date)
     ) {
-      setError('Check-out and check-in dates must fall on a weekday (Monday-Friday).');
+      setError('Check-out and check-in dates must fall on a weekday (Monday\u2013Friday).');
       return;
     }
 
@@ -393,6 +436,7 @@ export function PublicForm() {
 
       setSuccess(true);
       setRefillBanner('');
+      setIsRefillSession(false);
       setIsBulkRefillMode(false);
       setFormData({
         requester_name: '',
@@ -443,7 +487,10 @@ export function PublicForm() {
           Library!
         </p>
         <button
-          onClick={() => setSuccess(false)}
+          onClick={() => {
+            setSuccess(false);
+            setSearchParams({});
+          }}
           className="bg-emerald-600 text-white px-6 py-2 rounded-xl font-medium hover:bg-emerald-700 transition-colors"
         >
           Submit Another Request
@@ -471,20 +518,36 @@ export function PublicForm() {
       ? kitComponents.map((c) => `${c.kit_yield} ${c.name}`).join(', ')
       : '';
 
+  const departmentOptions =
+    formData.department && !hawaiiCountyDepartments.includes(formData.department)
+      ? [formData.department, ...hawaiiCountyDepartments]
+      : hawaiiCountyDepartments;
+
   return (
     <div className="max-w-3xl mx-auto">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Request Items</h1>
+        <h1 className="text-3xl font-bold text-slate-900 tracking-tight">
+          {isRefillSession ? 'Consumable Restock Request' : 'Request Items'}
+        </h1>
         <p className="text-slate-600 mt-2">
-          Reserve reusable and compostable event supplies from the County of Hawai{'\u02BB'}i Reduced Waste
-          Library.
+          Reserve reusable and compostable supplies from the County of Hawai{'\u02BB'}i Reduced
+          Waste Library.
         </p>
       </div>
 
       {refillBanner && (
-        <div className="mb-6 p-4 bg-emerald-50 text-emerald-800 rounded-xl flex items-start gap-3 border border-emerald-200">
-          <CheckCircle2 className="h-5 w-5 shrink-0 mt-0.5 text-emerald-600" />
-          <p className="text-sm font-medium">{refillBanner}</p>
+        <div className="mb-6 p-4 bg-emerald-50 text-emerald-800 rounded-xl flex items-start justify-between gap-3 border border-emerald-200">
+          <div className="flex items-start gap-3">
+            <CheckCircle2 className="h-5 w-5 shrink-0 mt-0.5 text-emerald-600" />
+            <p className="text-sm font-medium">{refillBanner}</p>
+          </div>
+          <button
+            type="button"
+            onClick={handleExitRefillMode}
+            className="text-xs font-semibold text-emerald-700 hover:text-emerald-950 underline shrink-0"
+          >
+            Switch to Standard Form
+          </button>
         </div>
       )}
 
@@ -553,7 +616,7 @@ export function PublicForm() {
                 <option value="" disabled>
                   Select a Department...
                 </option>
-                {hawaiiCountyDepartments.map((dept) => (
+                {departmentOptions.map((dept) => (
                   <option key={dept} value={dept}>
                     {dept}
                   </option>
@@ -562,7 +625,9 @@ export function PublicForm() {
             </div>
 
             <div className="space-y-2 md:col-span-2">
-              <label className="text-sm font-medium text-slate-700">Event Name</label>
+              <label className="text-sm font-medium text-slate-700">
+                {isRefillSession ? 'Hub / Breakroom Name' : 'Event Name'}
+              </label>
               <input
                 required
                 type="text"
@@ -587,8 +652,8 @@ export function PublicForm() {
                 className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
               />
               <p className="text-[11px] text-slate-500 italic mt-1 leading-tight">
-                Requires 2 business days notice (Mon-Fri). For events &gt;60 days out, contact OSCER
-                directly.
+                Requires 2 business days notice (Mon{'\u2013'}Fri). For events &gt;60 days out,
+                contact OSCER directly.
               </p>
             </div>
 
@@ -613,14 +678,17 @@ export function PublicForm() {
             Select Items
           </h2>
 
-          {kitComponents.length > 0 && !isBulkRefillMode && (
+          {/* Suppress the 25-person Event Kit banner on ALL QR / Refill links */}
+          {kitComponents.length > 0 && !isRefillSession && (
             <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-5 mb-6">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                   <h3 className="text-lg font-semibold text-emerald-900">
                     {baseKitSize}-Person Pre-Made Event Sets
                   </h3>
-                  <p className="text-sm text-emerald-700 mt-1">Each set includes: {kitSummaryText}.</p>
+                  <p className="text-sm text-emerald-700 mt-1">
+                    Each set includes: {kitSummaryText}.
+                  </p>
                   <div className="flex flex-wrap gap-3 mt-3">
                     {kitComponents.map(
                       (c) =>
@@ -648,7 +716,9 @@ export function PublicForm() {
                     type="number"
                     min="0"
                     value={setsRequested || ''}
-                    onChange={(e) => setSetsRequested(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                    onChange={(e) =>
+                      setSetsRequested(Math.max(0, parseInt(e.target.value, 10) || 0))
+                    }
                     className="w-24 px-3 py-2 rounded-lg border border-emerald-300 bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm"
                     placeholder="0"
                   />
@@ -659,7 +729,9 @@ export function PublicForm() {
 
           <div className="space-y-4">
             <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
-              A La Carte Top-Ups (Intervals of 10)
+              {isBulkRefillMode
+                ? 'Restock Quantities (Full Boxes / Sleeves or Loose Top-Ups)'
+                : 'A La Carte Top-Ups (Intervals of 10)'}
             </h3>
 
             {sortedInventory
@@ -681,6 +753,8 @@ export function PublicForm() {
                     className={`flex flex-col md:flex-row md:items-center justify-between p-4 rounded-xl border ${
                       isExceeded
                         ? 'border-red-200 bg-red-50'
+                        : total > 0
+                        ? 'border-emerald-200 bg-emerald-50/30'
                         : 'border-slate-100 bg-slate-50/50 hover:bg-slate-50'
                     } transition-colors gap-4`}
                   >
