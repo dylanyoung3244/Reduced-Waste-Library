@@ -1013,7 +1013,7 @@ async function startServer(): Promise<void> {
   });
 
   // --- SETTINGS & AUDIT ---
-  app.get('/api/settings', authenticateToken, requireAuditOrSuperAdmin, async (_req, res) => {
+  app.get('/api/settings', authenticateToken, requireSuperAdmin, async (_req, res) => {
     try {
       const doc = await db.collection('settings').doc('email_config').get();
       res.json(doc.data() || {});
