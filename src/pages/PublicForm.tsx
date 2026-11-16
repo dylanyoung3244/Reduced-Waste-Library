@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { InventoryItem } from '../types';
-import { CheckCircle2, AlertCircle, Minus, Plus, Package } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Package } from 'lucide-react';
 
 const hawaiiCountyDepartments = [
   'Animal Control and Protection Agency',
@@ -58,12 +58,25 @@ function formatLocalDate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function isWeekendIsoDate(isoDate: string): boolean {
+function isWeekendDateString(isoDate: string): boolean {
   const parts = isoDate.split('-').map(Number);
   if (parts.length !== 3 || parts.some(isNaN)) return false;
   const localDate = new Date(parts[0], parts[1] - 1, parts[2]);
   const day = localDate.getDay();
   return day === 0 || day === 6;
+}
+
+function addBusinessDays(startDate: Date, businessDays: number): Date {
+  const result = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+  let added = 0;
+  while (added < businessDays) {
+    result.setDate(result.getDate() + 1);
+    const day = result.getDay();
+    if (day !== 0 && day !== 6) {
+      added++;
+    }
+  }
+  return result;
 }
 
 export function PublicForm() {
@@ -72,6 +85,7 @@ export function PublicForm() {
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
+  const [refillBanner, setRefillBanner] = useState('');
 
   const [formData, setFormData] = useState({
     requester_name: '',
@@ -85,10 +99,9 @@ export function PublicForm() {
   });
 
   const [quantities, setQuantities] = useState<Record<string, number>>({});
-  const [boxQuantities, setBoxQuantities] = useState<Record<string, number>>({});
+  const [bulkBoxes, setBulkBoxes] = useState<Record<string, number>>({});
   const [setsRequested, setSetsRequested] = useState(0);
   const [allowedDomains, setAllowedDomains] = useState<string[]>(DEFAULT_DOMAINS);
-  const [kitComponents, setKitComponents] = useState<InventoryItem[]>([]);
 
   useEffect(() => {
     fetch('/api/allowed-domains')
@@ -100,227 +113,230 @@ export function PublicForm() {
       })
       .catch((err) => console.error('Failed to load allowed domains:', err));
 
+    const refillId = new URLSearchParams(window.location.search).get('refill');
+
     fetch('/api/categories')
       .then((res) => res.json())
-      .then((data) => {
+      .then(async (data) => {
         const cats: InventoryItem[] = Array.isArray(data) ? data : [];
         setInventory(cats);
-        setKitComponents(cats.filter((cat) => (cat.kit_yield ?? 0) > 0));
+
+        if (refillId) {
+          try {
+            const tplRes = await fetch(`/api/public/refill/${encodeURIComponent(refillId)}`);
+            if (tplRes.ok) {
+              const tpl = await tplRes.json();
+              const nextWeekday = formatLocalDate(addBusinessDays(new Date(), 2));
+              setFormData((prev) => ({
+                ...prev,
+                department: tpl.department || prev.department,
+                event_name: tpl.event_name ? `Restock: ${tpl.event_name}` : prev.event_name,
+                check_out_date: nextWeekday,
+                check_in_date: nextWeekday,
+              }));
+
+              const prefilledQty: Record<string, number> = {};
+              for (const li of tpl.line_items || []) {
+                const matchedCat = cats.find((c) => String(c.id) === String(li.category_id));
+                if (!matchedCat) continue;
+                const step = matchedCat.name === 'Reusable Water Jugs' ? 1 : 10;
+                const available =
+                  matchedCat.available_to_promise ?? matchedCat.current_count ?? 0;
+                const rounded = Math.ceil((Number(li.quantity) || 0) / step) * step;
+                const maxStepAligned =
+                  step > 1 ? Math.floor(available / step) * step : available;
+                prefilledQty[matchedCat.id] = Math.min(rounded, Math.max(0, maxStepAligned));
+              }
+              setQuantities(prefilledQty);
+              setRefillBanner(
+                `Pre-filled consumable restock for "${tpl.event_name}". Adjust quantities below if needed.`
+              );
+            }
+          } catch (e) {
+            console.error('Failed to load refill template:', e);
+          }
+        }
+
         setLoading(false);
       })
       .catch((err) => {
         console.error(err);
-        setError('Failed to load inventory categories. Please refresh the page.');
+        setError('Failed to load available library items.');
         setLoading(false);
       });
   }, []);
 
   const today = new Date();
-  const minDateString = formatLocalDate(today);
+  const minCheckOutDateString = formatLocalDate(addBusinessDays(today, 2));
   const maxDate = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 60);
   const maxDateString = formatLocalDate(maxDate);
-
-  const isSingleUnitItem = (item: InventoryItem): boolean => {
-    return item.name === 'Reusable Water Jugs';
-  };
-
-  const getStepSize = (item: InventoryItem): number => {
-    return isSingleUnitItem(item) ? 1 : 10;
-  };
-
-  const getAvailableCount = (item: InventoryItem): number => {
-    return item.available_to_promise ?? item.current_count ?? item.count ?? 0;
-  };
-
-  const getTotalQuantity = (item: InventoryItem): number => {
-    const aLaCarte = quantities[item.id] || 0;
-    const bulkSize = item.bulk_unit_size && item.bulk_unit_size > 0 ? item.bulk_unit_size : 0;
-    const bulkUnits = (boxQuantities[item.id] || 0) * bulkSize;
-    const setYield = item.kit_yield || 0;
-    return aLaCarte + bulkUnits + setsRequested * setYield;
-  };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
 
+    let parsedValue: string | boolean = value;
     if (type === 'checkbox') {
-      setFormData((prev) => ({
-        ...prev,
-        [name]: (e.target as HTMLInputElement).checked,
-      }));
-      return;
+      parsedValue = (e.target as HTMLInputElement).checked;
     }
 
     if (name === 'check_out_date' || name === 'check_in_date') {
-      if (value && isWeekendIsoDate(value)) {
-        setError('Check-out and check-in dates cannot fall on a Saturday or Sunday.');
-        setFormData((prev) => ({ ...prev, [name]: '' }));
+      if (value && isWeekendDateString(value)) {
+        setError('Check-out and check-in dates cannot fall on a weekend (Monday–Friday only).');
         return;
       }
-      if (value && value < minDateString) {
-        setError('Dates cannot be in the past.');
-        setFormData((prev) => ({ ...prev, [name]: '' }));
+
+      if (name === 'check_out_date' && value && value < minCheckOutDateString) {
+        setError('Please allow at least 2 business days lead time for check-out preparation.');
         return;
       }
-      if (name === 'check_in_date' && formData.check_out_date && value < formData.check_out_date) {
+
+      if (
+        name === 'check_in_date' &&
+        value &&
+        formData.check_out_date &&
+        value < formData.check_out_date
+      ) {
         setError('Check-in date cannot be earlier than the check-out date.');
-        setFormData((prev) => ({ ...prev, check_in_date: formData.check_out_date }));
         return;
       }
-      if (name === 'check_out_date' && formData.check_in_date && formData.check_in_date < value) {
-        setError('');
-        setFormData((prev) => ({
-          ...prev,
-          check_out_date: value,
-          check_in_date: value,
-        }));
-        return;
-      }
+
       setError('');
     }
 
-    setFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    setFormData((prev) => {
+      const updated = { ...prev, [name]: parsedValue };
+      if (
+        name === 'check_out_date' &&
+        typeof parsedValue === 'string' &&
+        prev.check_in_date &&
+        prev.check_in_date < parsedValue
+      ) {
+        updated.check_in_date = parsedValue;
+      }
+      return updated;
+    });
   };
 
-  const handleRawQuantityInput = (item: InventoryItem, rawValue: string) => {
-    if (rawValue === '') {
+  const getItemStep = (item: InventoryItem): number => {
+    return item.name === 'Reusable Water Jugs' ? 1 : 10;
+  };
+
+  const handleQuantityChange = (item: InventoryItem, value: string, availableCount: number) => {
+    if (value === '') {
       setQuantities((prev) => ({ ...prev, [item.id]: 0 }));
       return;
     }
-    const parsed = parseInt(rawValue, 10);
-    if (isNaN(parsed) || parsed < 0) {
+
+    let num = parseInt(value, 10);
+    if (isNaN(num) || num < 0) {
       setQuantities((prev) => ({ ...prev, [item.id]: 0 }));
       return;
     }
-    setQuantities((prev) => ({ ...prev, [item.id]: parsed }));
-  };
 
-  const normalizeQuantityOnBlur = (item: InventoryItem) => {
-    const current = quantities[item.id] || 0;
-    if (current <= 0) return;
+    const step = getItemStep(item);
+    if (step > 1) {
+      num = Math.round(num / step) * step;
+    }
 
-    const step = getStepSize(item);
-    const available = getAvailableCount(item);
     const otherAllocated =
       setsRequested * (item.kit_yield || 0) +
-      (boxQuantities[item.id] || 0) * (item.bulk_unit_size || 0);
-    const maxALaCarte = Math.max(0, available - otherAllocated);
+      (bulkBoxes[item.id] || 0) * (item.bulk_unit_size || 0);
+    const remainingMax = Math.max(0, availableCount - otherAllocated);
+    const clampedMax = step > 1 ? Math.floor(remainingMax / step) * step : remainingMax;
 
-    let normalized = step > 1 ? Math.round(current / step) * step : current;
-    if (normalized > maxALaCarte) {
-      normalized = step > 1 ? Math.floor(maxALaCarte / step) * step : maxALaCarte;
-    }
-    setQuantities((prev) => ({ ...prev, [item.id]: Math.max(0, normalized) }));
+    setQuantities((prev) => ({ ...prev, [item.id]: Math.min(num, clampedMax) }));
   };
 
-  const adjustALaCarte = (item: InventoryItem, deltaSteps: number) => {
-    const step = getStepSize(item);
-    const current = quantities[item.id] || 0;
-    const next = Math.max(0, current + deltaSteps * step);
-    setQuantities((prev) => ({ ...prev, [item.id]: next }));
+  const handleBulkBoxChange = (item: InventoryItem, value: string) => {
+    const boxes = Math.max(0, parseInt(value, 10) || 0);
+    setBulkBoxes((prev) => ({ ...prev, [item.id]: boxes }));
   };
 
-  const adjustBoxQuantity = (item: InventoryItem, nextBoxes: number) => {
-    setBoxQuantities((prev) => ({
-      ...prev,
-      [item.id]: Math.max(0, Math.floor(nextBoxes) || 0),
-    }));
+  const getTotalQuantity = (item: InventoryItem): number => {
+    const aLaCarte = quantities[item.id] || 0;
+    const setYield = item.kit_yield || 0;
+    const boxUnits = (bulkBoxes[item.id] || 0) * (item.bulk_unit_size || 0);
+    return aLaCarte + setsRequested * setYield + boxUnits;
   };
 
   const buildPackHint = (item: InventoryItem): string | undefined => {
-    const hints: string[] = [];
-    const setQty = setsRequested * (item.kit_yield || 0);
-    const boxes = boxQuantities[item.id] || 0;
-    const bulkSize = item.bulk_unit_size || 0;
-    const bulkLabel = item.bulk_unit_label || 'Box';
-    const loose = quantities[item.id] || 0;
+    const parts: string[] = [];
+    const kitYield = item.kit_yield || 0;
+    const boxes = bulkBoxes[item.id] || 0;
+    const boxSize = item.bulk_unit_size || 0;
+    const aLaCarte = quantities[item.id] || 0;
 
-    if (setsRequested > 0 && setQty > 0) {
-      hints.push(`${setsRequested}x Kit (${setQty})`);
+    if (setsRequested > 0 && kitYield > 0) {
+      parts.push(`${setsRequested}x Kit (${setsRequested * kitYield})`);
     }
-    if (boxes > 0 && bulkSize > 0) {
-      hints.push(`${boxes}x ${bulkLabel} (${boxes * bulkSize})`);
+    if (boxes > 0 && boxSize > 0) {
+      parts.push(`${boxes}x ${item.bulk_unit_label || 'Box'} (${boxes * boxSize})`);
     }
-    if (loose > 0 && (hints.length > 0 || boxes > 0)) {
-      hints.push(`+${loose} loose`);
+    if (aLaCarte > 0 && (parts.length > 0 || boxSize > 0)) {
+      parts.push(`+${aLaCarte} loose`);
     }
-    return hints.length > 0 ? hints.join(', ') : undefined;
+    return parts.length > 0 ? parts.join(' + ') : undefined;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.terms_agreed) {
-      setError('You must agree to the return and care terms before submitting.');
+      setError('You must agree to the return and care terms.');
       return;
     }
 
-    if (formData.check_out_date < minDateString) {
-      setError('Check-out date cannot be in the past.');
+    if (formData.check_out_date < minCheckOutDateString) {
+      setError('Check-out date must be at least 2 business days from today.');
       return;
     }
 
     if (formData.check_in_date < formData.check_out_date) {
-      setError('Check-in date cannot be earlier than the check-out date.');
+      setError('Check-in date cannot be earlier than check-out date.');
       return;
     }
 
-    if (isWeekendIsoDate(formData.check_out_date) || isWeekendIsoDate(formData.check_in_date)) {
-      setError('Check-out and check-in dates must fall on County business days (Monday–Friday).');
+    if (
+      isWeekendDateString(formData.check_out_date) ||
+      isWeekendDateString(formData.check_in_date)
+    ) {
+      setError('Check-out and check-in dates must fall on a weekday (Monday–Friday).');
       return;
     }
 
     const email = formData.requester_email.trim().toLowerCase();
     const domainsToCheck = allowedDomains.length > 0 ? allowedDomains : DEFAULT_DOMAINS;
     const isAllowed = domainsToCheck.some((domain) => email.endsWith(domain.toLowerCase()));
+
     if (!isAllowed) {
-      setError(
-        `Invalid email domain. Please use an approved email address (${domainsToCheck.join(', ')}).`
-      );
+      setError('Invalid email domain. Please use an approved County or State email address.');
       return;
     }
 
-    // Ensure all typed A La Carte inputs obey step intervals before submitting
-    const invalidStepItem = inventory
-      .filter((item) => item.is_requestable === 1)
-      .find((item) => {
-        const step = getStepSize(item);
-        const val = quantities[item.id] || 0;
-        return val > 0 && val % step !== 0;
-      });
-
-    if (invalidStepItem) {
-      normalizeQuantityOnBlur(invalidStepItem);
-      setError(
-        `A La Carte quantities for ${invalidStepItem.name} must be in multiples of ${getStepSize(invalidStepItem)}. We adjusted the number—please review and submit again.`
-      );
-      return;
-    }
-
-    const requestableItems = inventory.filter((item) => item.is_requestable === 1);
+    const requestableItems = inventory.filter(
+      (item) => item.is_requestable === 1 || (item as any).is_requestable === true
+    );
 
     const line_items = requestableItems
       .map((item) => {
-        const packHint = buildPackHint(item);
+        const pack_hint = buildPackHint(item);
         return {
           category_id: item.id,
           category_name: item.name || item.category_name || item.category || 'Unknown Item',
           quantity: getTotalQuantity(item),
-          ...(packHint ? { pack_hint: packHint } : {}),
+          ...(pack_hint ? { pack_hint } : {}),
         };
       })
       .filter((item) => item.quantity > 0);
 
     if (line_items.length === 0) {
-      setError('Please select at least one kit or item to request.');
+      setError('Please select at least one kit or individual item to request.');
       return;
     }
 
-    const exceededItems = requestableItems.filter(
-      (item) => getTotalQuantity(item) > getAvailableCount(item)
-    );
+    const exceededItems = requestableItems.filter((item) => {
+      const availableCount = item.available_to_promise ?? item.current_count ?? item.count ?? 0;
+      return getTotalQuantity(item) > availableCount;
+    });
 
     if (exceededItems.length > 0) {
       setError(
@@ -351,6 +367,7 @@ export function PublicForm() {
       }
 
       setSuccess(true);
+      setRefillBanner('');
       setFormData({
         requester_name: '',
         requester_email: '',
@@ -362,22 +379,18 @@ export function PublicForm() {
         terms_agreed: false,
       });
       setQuantities({});
-      setBoxQuantities({});
+      setBulkBoxes({});
       setSetsRequested(0);
 
-      // Refresh live ATP counts after submission
       fetch('/api/categories')
         .then((r) => r.json())
         .then((cats) => {
-          if (Array.isArray(cats)) {
-            setInventory(cats);
-            setKitComponents(cats.filter((c: InventoryItem) => (c.kit_yield ?? 0) > 0));
-          }
+          if (Array.isArray(cats)) setInventory(cats);
         })
         .catch(() => {});
     } catch (err) {
       console.error(err);
-      setError('A network error occurred while submitting your request.');
+      setError('An error occurred while submitting your request.');
     } finally {
       setSubmitting(false);
     }
@@ -397,7 +410,7 @@ export function PublicForm() {
         <CheckCircle2 className="h-16 w-16 text-emerald-500 mx-auto mb-4" />
         <h2 className="text-2xl font-semibold text-slate-900 mb-2">Request Submitted!</h2>
         <p className="text-slate-600 mb-2">
-          Your request has been received and reserved pending staff review.
+          Your request has been received and is awaiting OSCER staff approval.
         </p>
         <p className="text-emerald-700 font-medium mb-6">
           We will confirm pickup details within 2 business days. Mahalo for using the Reduced Waste
@@ -405,7 +418,7 @@ export function PublicForm() {
         </p>
         <button
           onClick={() => setSuccess(false)}
-          className="bg-emerald-600 text-white px-6 py-2 rounded-xl font-medium hover:bg-emerald-700 transition-colors cursor-pointer"
+          className="bg-emerald-600 text-white px-6 py-2 rounded-xl font-medium hover:bg-emerald-700 transition-colors"
         >
           Submit Another Request
         </button>
@@ -420,37 +433,39 @@ export function PublicForm() {
     const bIndex = sortOrder.indexOf(bName);
     const aVal = aIndex === -1 ? 999 : aIndex;
     const bVal = bIndex === -1 ? 999 : bIndex;
-    if (aVal !== bVal) return aVal - bVal;
-    return aName.localeCompare(bName);
+    return aVal !== bVal ? aVal - bVal : aName.localeCompare(bName);
   });
 
-  const platesItem = inventory.find((i) => i.name === 'Compostable Plates');
-  const baseKitSize =
-    platesItem && (platesItem.kit_yield ?? 0) > 0
-      ? platesItem.kit_yield!
-      : kitComponents[0]?.kit_yield || 25;
+  const kitComponents = sortedInventory.filter((cat) => (cat.kit_yield || 0) > 0);
+  const platesItem = kitComponents.find((i) => i.name?.toLowerCase().includes('plate'));
+  const baseKitSize = platesItem?.kit_yield || kitComponents[0]?.kit_yield || 25;
 
   const kitSummaryText =
     kitComponents.length > 0
-      ? `Each set includes: ${kitComponents
-          .map((c) => `${c.kit_yield} ${c.name.toLowerCase()}`)
-          .join(', ')}.`
-      : `Standard ${baseKitSize}-person event bundle.`;
+      ? kitComponents.map((c) => `${c.kit_yield} ${c.name}`).join(', ')
+      : '';
 
   return (
     <div className="max-w-3xl mx-auto">
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Request Items</h1>
         <p className="text-slate-600 mt-2">
-          Reserve reusable and fiber-compostable event supplies from the OSCER Reduced Waste
+          Reserve reusable and compostable event supplies from the County of Hawaiʻi Reduced Waste
           Library.
         </p>
       </div>
 
+      {refillBanner && (
+        <div className="mb-6 p-4 bg-emerald-50 text-emerald-800 rounded-xl flex items-start gap-3 border border-emerald-200">
+          <CheckCircle2 className="h-5 w-5 shrink-0 mt-0.5 text-emerald-600" />
+          <p className="text-sm font-medium">{refillBanner}</p>
+        </div>
+      )}
+
       {error && (
         <div className="mb-6 p-4 bg-red-50 text-red-700 rounded-xl flex items-start gap-3 border border-red-100">
           <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
-          <p className="text-sm">{error}</p>
+          <p>{error}</p>
         </div>
       )}
 
@@ -534,36 +549,32 @@ export function PublicForm() {
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">
-                Check-out Date (Mon–Fri)
-              </label>
+              <label className="text-sm font-medium text-slate-700">Check-out Date</label>
               <input
                 required
                 type="date"
                 name="check_out_date"
                 value={formData.check_out_date}
                 onChange={handleInputChange}
-                min={minDateString}
+                min={minCheckOutDateString}
                 max={maxDateString}
                 className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
               />
               <p className="text-[11px] text-slate-500 italic mt-1 leading-tight">
-                Please allow 2 business days for preparation. For events more than 60 days out,
-                contact OSCER directly.
+                Requires 2 business days notice (Mon–Fri). For events &gt;60 days out, contact OSCER
+                directly.
               </p>
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">
-                Return / Check-in Date (Mon–Fri)
-              </label>
+              <label className="text-sm font-medium text-slate-700">Check-in Date</label>
               <input
                 required
                 type="date"
                 name="check_in_date"
                 value={formData.check_in_date}
                 onChange={handleInputChange}
-                min={formData.check_out_date || minDateString}
+                min={formData.check_out_date || minCheckOutDateString}
                 max={maxDateString}
                 className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
               />
@@ -583,7 +594,7 @@ export function PublicForm() {
                   <h3 className="text-lg font-semibold text-emerald-900">
                     {baseKitSize}-Person Pre-Made Event Sets
                   </h3>
-                  <p className="text-sm text-emerald-700 mt-1">{kitSummaryText}</p>
+                  <p className="text-sm text-emerald-700 mt-1">Each set includes: {kitSummaryText}.</p>
                   <div className="flex flex-wrap gap-3 mt-3">
                     {kitComponents.map(
                       (c) =>
@@ -596,7 +607,7 @@ export function PublicForm() {
                               referrerPolicy="no-referrer"
                             />
                             <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-emerald-900 text-white text-[10px] rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity">
-                              {c.name} ({c.kit_yield})
+                              {c.name} (x{c.kit_yield})
                             </div>
                           </div>
                         )
@@ -607,34 +618,14 @@ export function PublicForm() {
                   <label className="block text-xs font-bold text-emerald-800 uppercase mb-1">
                     Kit Quantity
                   </label>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setSetsRequested((prev) => Math.max(0, prev - 1))}
-                      className="p-2 rounded-lg bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-100 transition-colors cursor-pointer"
-                      aria-label="Decrease kits"
-                    >
-                      <Minus className="w-4 h-4" />
-                    </button>
-                    <input
-                      type="number"
-                      min="0"
-                      value={setsRequested || ''}
-                      onChange={(e) =>
-                        setSetsRequested(Math.max(0, parseInt(e.target.value, 10) || 0))
-                      }
-                      className="w-16 text-center px-2 py-2 rounded-lg border border-emerald-300 bg-white focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm font-medium"
-                      placeholder="0"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setSetsRequested((prev) => prev + 1)}
-                      className="p-2 rounded-lg bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-100 transition-colors cursor-pointer"
-                      aria-label="Increase kits"
-                    >
-                      <Plus className="w-4 h-4" />
-                    </button>
-                  </div>
+                  <input
+                    type="number"
+                    min="0"
+                    value={setsRequested || ''}
+                    onChange={(e) => setSetsRequested(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                    className="w-24 px-3 py-2 rounded-lg border border-emerald-300 bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all shadow-sm"
+                    placeholder="0"
+                  />
                 </div>
               </div>
             </div>
@@ -642,20 +633,21 @@ export function PublicForm() {
 
           <div className="space-y-4">
             <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
-              Individual &amp; Top-Up Items
+              A La Carte Top-Ups (Intervals of 10)
             </h3>
 
             {sortedInventory
-              .filter((item) => item.is_requestable === 1)
+              .filter((item) => item.is_requestable === 1 || (item as any).is_requestable === true)
               .map((item) => {
                 const total = getTotalQuantity(item);
-                const availableCount = getAvailableCount(item);
+                const availableCount =
+                  item.available_to_promise ?? item.current_count ?? item.count ?? 0;
                 const categoryName = item.name || 'Unknown';
                 const isExceeded = total > availableCount;
-                const step = getStepSize(item);
+                const imageUrl = (item as any).photo_url || item.image_url;
+                const step = getItemStep(item);
                 const hasBulkOption = Boolean(item.bulk_unit_size && item.bulk_unit_size > 0);
                 const bulkLabel = item.bulk_unit_label || 'Box';
-                const imageUrl = item.image_url;
 
                 return (
                   <div
@@ -667,32 +659,34 @@ export function PublicForm() {
                     } transition-colors gap-4`}
                   >
                     <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-lg bg-white border border-slate-200 overflow-hidden flex items-center justify-center shrink-0">
-                        {imageUrl ? (
+                      {imageUrl ? (
+                        <div className="shrink-0 hidden sm:block">
                           <img
                             src={imageUrl}
                             alt={categoryName}
-                            className="w-full h-full object-cover"
+                            className="w-12 h-12 object-cover rounded-lg shadow-sm border border-slate-200"
                             referrerPolicy="no-referrer"
                           />
-                        ) : (
+                        </div>
+                      ) : (
+                        <div className="shrink-0 hidden sm:flex w-12 h-12 rounded-lg bg-white border border-slate-200 items-center justify-center">
                           <Package className="w-5 h-5 text-slate-300" />
-                        )}
-                      </div>
+                        </div>
+                      )}
                       <div>
-                        <div className="flex items-center gap-2 flex-wrap">
+                        <div className="flex items-center gap-2">
                           <h3 className="font-medium text-slate-900">{categoryName}</h3>
                           <span
                             className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full ${
                               item.item_type === 'reusable'
                                 ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                                : 'bg-amber-50 text-amber-800 border border-amber-200'
+                                : 'bg-amber-50 text-amber-700 border border-amber-200'
                             }`}
                           >
-                            {item.item_type === 'reusable' ? 'Reusable (Return)' : 'Compostable'}
+                            {item.item_type === 'reusable' ? 'Reusable' : 'Compostable'}
                           </span>
                         </div>
-                        <p className="text-sm text-slate-500 mt-0.5">
+                        <p className="text-sm text-slate-500 mt-1">
                           {availableCount > 0 ? (
                             <span className="text-emerald-600 font-medium">
                               {availableCount} available
@@ -704,80 +698,54 @@ export function PublicForm() {
                       </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center justify-end gap-4">
-                      <div className="text-right min-w-[110px]">
+                    <div className="flex flex-wrap items-center gap-4 justify-end">
+                      <div className="text-right mr-1">
                         <div
-                          className={`text-sm font-semibold ${
+                          className={`text-sm font-medium ${
                             isExceeded ? 'text-red-600' : 'text-slate-700'
                           }`}
                         >
-                          Total: {total}
+                          Total Requested: {total}
                         </div>
-                        {isExceeded && (
-                          <div className="text-xs text-red-500 font-medium">Exceeds available</div>
-                        )}
+                        {isExceeded && <div className="text-xs text-red-500">Exceeds inventory</div>}
                       </div>
 
-                      {hasBulkOption && (
-                        <>
-                          <div className="w-px h-8 bg-slate-200 hidden sm:block"></div>
-                          <div>
-                            <label className="block text-xs text-slate-500 mb-1">
-                              {bulkLabel} ({item.bulk_unit_size} ct)
-                            </label>
-                            <input
-                              type="number"
-                              min="0"
-                              step="1"
-                              value={boxQuantities[item.id] || ''}
-                              onChange={(e) =>
-                                adjustBoxQuantity(item, parseInt(e.target.value, 10) || 0)
-                              }
-                              disabled={availableCount < (item.bulk_unit_size || 1)}
-                              className="w-20 px-3 py-2 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 outline-none disabled:opacity-50 disabled:bg-slate-100 text-sm"
-                              placeholder="0"
-                            />
-                          </div>
-                        </>
-                      )}
+                      <div className="w-px h-8 bg-slate-200 hidden md:block"></div>
 
-                      <div className="w-px h-8 bg-slate-200 hidden sm:block"></div>
+                      {hasBulkOption && (
+                        <div>
+                          <label className="block text-xs text-slate-500 mb-1">
+                            {bulkLabel} ({item.bulk_unit_size} ct)
+                          </label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={bulkBoxes[item.id] || ''}
+                            onChange={(e) => handleBulkBoxChange(item, e.target.value)}
+                            disabled={availableCount < (item.bulk_unit_size || 1)}
+                            className="w-20 px-3 py-2 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all disabled:opacity-50 disabled:bg-slate-100"
+                            placeholder="0"
+                          />
+                        </div>
+                      )}
 
                       <div>
                         <label className="block text-xs text-slate-500 mb-1">
                           A La Carte (+{step})
                         </label>
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            disabled={availableCount <= 0 || (quantities[item.id] || 0) <= 0}
-                            onClick={() => adjustALaCarte(item, -1)}
-                            className="p-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-40 cursor-pointer"
-                            aria-label={`Remove ${step} ${categoryName}`}
-                          >
-                            <Minus className="w-3.5 h-3.5" />
-                          </button>
-                          <input
-                            type="number"
-                            min="0"
-                            step={step}
-                            value={quantities[item.id] || ''}
-                            onChange={(e) => handleRawQuantityInput(item, e.target.value)}
-                            onBlur={() => normalizeQuantityOnBlur(item)}
-                            disabled={availableCount <= 0}
-                            className="w-20 text-center px-2 py-1.5 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 outline-none transition-all disabled:opacity-50 disabled:bg-slate-100 text-sm"
-                            placeholder="0"
-                          />
-                          <button
-                            type="button"
-                            disabled={availableCount <= 0 || total + step > availableCount}
-                            onClick={() => adjustALaCarte(item, 1)}
-                            className="p-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-40 cursor-pointer"
-                            aria-label={`Add ${step} ${categoryName}`}
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                        <input
+                          type="number"
+                          min="0"
+                          step={step}
+                          value={quantities[item.id] || ''}
+                          onChange={(e) =>
+                            handleQuantityChange(item, e.target.value, availableCount)
+                          }
+                          disabled={availableCount <= 0}
+                          className="w-24 px-3 py-2 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all disabled:opacity-50 disabled:bg-slate-100"
+                          placeholder="0"
+                        />
                       </div>
                     </div>
                   </div>
@@ -800,7 +768,7 @@ export function PublicForm() {
             <span className="text-sm text-slate-600 group-hover:text-slate-900 transition-colors">
               Upon completion of the event, I will wash all reusable items and return them to OSCER
               within 1 week. If any reusable equipment is damaged, lost, or stolen, I will report it
-              to OSCER immediately.
+              to OSCER upon check-in.
             </span>
           </label>
         </div>
@@ -808,7 +776,7 @@ export function PublicForm() {
         {error && (
           <div className="p-4 bg-red-50 text-red-700 rounded-xl flex items-start gap-3 border border-red-100">
             <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
-            <p className="text-sm">{error}</p>
+            <p>{error}</p>
           </div>
         )}
 

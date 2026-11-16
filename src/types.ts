@@ -103,3 +103,28 @@ export type Item = {
   is_deleted?: boolean;
   kit_components: KitComponent[];
 };
+
+export type ConsumableFulfillmentMode = 'per_cycle' | 'on_demand';
+
+export type RecurringFrequency =
+  | 'weekly'
+  | 'monthly_exact'
+  | 'monthly_nth_weekday'
+  | 'quarterly'
+  | 'annually'
+  | 'on_demand';
+
+export type RecurringTemplate = {
+  id: string;
+  department: string;
+  event_name: string;
+  frequency: RecurringFrequency;
+  next_run_date: string | null;
+  line_items: RequestLineItem[];
+  is_stationed: boolean;
+  consumable_mode?: ConsumableFulfillmentMode;
+  ordinal?: string;
+  weekday?: string;
+  is_deleted?: boolean;
+  created_at?: string;
+};

@@ -3720,17 +3720,35 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const [department, setDepartment] = useState('');
   const [eventName, setEventName] = useState('');
   const [frequency, setFrequency] = useState<
-    'weekly' | 'monthly_exact' | 'monthly_nth_weekday' | 'quarterly' | 'annually'
+    'weekly' | 'monthly_exact' | 'monthly_nth_weekday' | 'quarterly' | 'annually' | 'on_demand'
   >('monthly_exact');
   const [nextRunDate, setNextRunDate] = useState('');
   const [lineItems, setLineItems] = useState<any[]>([]);
   const [ordinal, setOrdinal] = useState('first');
   const [weekday, setWeekday] = useState('1');
   const [isStationed, setIsStationed] = useState(false);
+  const [consumableMode, setConsumableMode] = useState<'per_cycle' | 'on_demand'>('per_cycle');
+  const [spawnInitialStash, setSpawnInitialStash] = useState(false);
+
+  const resetForm = () => {
+    setEditingId(null);
+    setDepartment('');
+    setEventName('');
+    setFrequency('monthly_exact');
+    setNextRunDate('');
+    setLineItems([]);
+    setIsStationed(false);
+    setConsumableMode('per_cycle');
+    setSpawnInitialStash(false);
+    setOrdinal('first');
+    setWeekday('1');
+  };
 
   const fetchTemplatesAndCategories = async () => {
     try {
@@ -3761,7 +3779,7 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
         {
           category_id: categories[0].id,
           category_name: categories[0].name,
-          quantity: 1,
+          quantity: 25,
         },
       ]);
     }
@@ -3786,18 +3804,45 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
     setLineItems(lineItems.filter((_, i) => i !== index));
   };
 
+  const handleEditTemplate = (entry: any) => {
+    setEditingId(entry.id);
+    setDepartment(entry.department || '');
+    setEventName(entry.event_name || '');
+    setFrequency(entry.frequency || 'monthly_exact');
+    setNextRunDate(entry.next_run_date ? entry.next_run_date.split('T')[0] : '');
+    setLineItems(entry.line_items || []);
+    setIsStationed(Boolean(entry.is_stationed));
+    setConsumableMode(entry.consumable_mode || 'per_cycle');
+    setSpawnInitialStash(false);
+    setOrdinal(entry.ordinal || 'first');
+    setWeekday(entry.weekday || '1');
+  };
+
+  const handleCopyRefillLink = async (id: string) => {
+    const refillUrl = `${window.location.origin}/?refill=${encodeURIComponent(id)}`;
+    try {
+      await navigator.clipboard.writeText(refillUrl);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2500);
+    } catch {
+      prompt('Copy this QR / Quick-Refill URL:', refillUrl);
+    }
+  };
+
   const handleDeleteTemplate = async (id: string) => {
     if (
       confirm(
-        'Archive this recurring order template? Future spawns will stop, and any stationed reusable stock will be returned to inventory.'
+        'Archive this recurring rule? Future spawns will stop, and any stationed reusable items will be returned to Hilo shelf inventory.'
       )
     ) {
       try {
         const response = await fetchWithAuth(`/api/recurring/${id}`, { method: 'DELETE' });
         if (response.ok) {
+          if (editingId === id) resetForm();
           fetchTemplatesAndCategories();
         } else {
-          alert('Failed to delete template');
+          const data = await response.json();
+          alert(data.error || 'Failed to delete template');
         }
       } catch (err) {
         console.error('Error deleting template:', err);
@@ -3805,43 +3850,44 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
     }
   };
 
-  const handleCreateTemplate = async (e: React.FormEvent) => {
+  const handleSaveTemplate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!department || !eventName || !nextRunDate || lineItems.length === 0) {
+    const needsDate = frequency !== 'on_demand';
+    if (!department || !eventName || (needsDate && !nextRunDate) || lineItems.length === 0) {
       alert('Please fill out all required fields and add at least one line item.');
       return;
     }
+
+    const url = editingId ? `/api/recurring/${editingId}` : '/api/recurring';
+    const method = editingId ? 'PUT' : 'POST';
+
     try {
       setSubmitting(true);
-      const response = await fetchWithAuth('/api/recurring', {
-        method: 'POST',
+      const response = await fetchWithAuth(url, {
+        method,
         body: JSON.stringify({
           department,
           event_name: eventName,
           frequency,
-          next_run_date: new Date(`${nextRunDate}T12:00:00Z`).toISOString(),
+          next_run_date: needsDate ? new Date(`${nextRunDate}T12:00:00Z`).toISOString() : null,
           line_items: lineItems,
           is_stationed: isStationed,
+          consumable_mode: frequency === 'on_demand' ? 'on_demand' : consumableMode,
+          spawn_initial_stash: !editingId && isStationed && spawnInitialStash,
           ordinal,
           weekday,
         }),
       });
+      const data = await response.json();
       if (response.ok) {
-        setDepartment('');
-        setEventName('');
-        setFrequency('monthly_exact');
-        setNextRunDate('');
-        setLineItems([]);
-        setIsStationed(false);
-        setOrdinal('first');
-        setWeekday('1');
+        resetForm();
         fetchTemplatesAndCategories();
       } else {
-        alert('Failed to create recurring order template');
+        alert(data.error || 'Failed to save recurring order template');
       }
     } catch (err) {
       console.error(err);
-      alert('Error creating template');
+      alert('Error saving template');
     } finally {
       setSubmitting(false);
     }
@@ -3852,18 +3898,18 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-xl font-semibold text-slate-900">
-            Recurring Order Spawner Templates
+            Recurring Schedules, Stationed Hubs & QR Refill Rules
           </h2>
           <p className="text-sm text-slate-500">
-            Matching rules automatically spawn Approved or Stationed tickets within a 30-day
-            lookahead window.
+            Automate 30-day lookahead commission orders, off-site stationed reusable kits, and
+            QR-code breakroom restock links.
           </p>
         </div>
         <button
           onClick={() => setIsHelpOpen(true)}
           className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition-colors shrink-0"
         >
-          <HelpCircle className="w-4 h-4" /> How to use this page
+          <HelpCircle className="w-4 h-4" /> How Modes Work
         </button>
       </div>
 
@@ -3871,73 +3917,135 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
         <div className="lg:col-span-2 space-y-4">
           <div className="bg-slate-50 rounded-xl p-4 border border-slate-200">
             <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wider mb-2">
-              Active Recurrences
+              Active Rules & Hubs
             </h3>
             {loading ? (
               <div className="py-8 text-center text-slate-500">Loading templates...</div>
             ) : templates.length === 0 ? (
               <div className="py-8 text-center text-slate-500">
-                No active recurring rules specified.
+                No active recurring rules or stationed hubs configured yet.
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="border-b border-slate-200 text-xs font-semibold text-slate-600 uppercase">
-                      <th className="py-3 px-4">Department</th>
-                      <th className="py-3 px-4">Event Name</th>
-                      <th className="py-3 px-4">Frequency</th>
-                      <th className="py-3 px-4">Next Event Date</th>
-                      <th className="py-3 px-4">Line Items</th>
-                      <th className="py-3 px-4 text-right">Actions</th>
+                      <th className="py-3 px-3">Hub / Department</th>
+                      <th className="py-3 px-3">Schedule</th>
+                      <th className="py-3 px-3">Next Spawn</th>
+                      <th className="py-3 px-3">Allocated Items</th>
+                      <th className="py-3 px-3 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-sm">
-                    {templates.map((entry) => (
-                      <tr key={entry.id} className="hover:bg-slate-50/50">
-                        <td className="py-3 px-4 font-medium text-slate-900">
-                          {entry.department}
-                          {entry.is_stationed && (
-                            <span className="block text-[10px] text-emerald-700 font-semibold uppercase">
-                              Stationed Off-Site
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 px-4 text-slate-600">{entry.event_name}</td>
-                        <td className="py-3 px-4">
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium uppercase tracking-wide bg-indigo-50 text-indigo-700 border border-indigo-200">
-                            {entry.frequency}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-slate-600">
-                          {entry.next_run_date ? entry.next_run_date.split('T')[0] : 'N/A'}
-                        </td>
-                        <td className="py-3 px-4">
-                          <div className="text-xs text-slate-600 max-w-xs space-y-0.5">
-                            {(entry.line_items || []).map((li: any, idx: number) => (
-                              <div
-                                key={idx}
-                                className="flex justify-between border-b border-dashed border-slate-100 pb-0.5"
-                              >
-                                <span>{li.category_name}</span>
-                                <span className="font-semibold text-slate-800 ml-2">
-                                  x{li.quantity}
+                    {templates.map((entry) => {
+                      const isPullMode =
+                        entry.frequency === 'on_demand' || entry.consumable_mode === 'on_demand';
+                      return (
+                        <tr key={entry.id} className="hover:bg-slate-50/50">
+                          <td className="py-3 px-3">
+                            <div className="font-medium text-slate-900">{entry.event_name}</div>
+                            <div className="text-xs text-slate-500">{entry.department}</div>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {entry.is_stationed && (
+                                <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded font-semibold uppercase">
+                                  Reusables Stationed
                                 </span>
-                              </div>
-                            ))}
-                          </div>
-                        </td>
-                        <td className="py-3 px-4 text-right">
-                          <button
-                            onClick={() => handleDeleteTemplate(entry.id)}
-                            className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50 cursor-pointer transition-colors"
-                            title="Archive Recurrence Rule"
-                          >
-                            <Trash2 className="w-4 h-4 inline-block" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                              )}
+                              {entry.is_stationed && entry.frequency !== 'on_demand' && (
+                                <span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded font-semibold uppercase">
+                                  {entry.consumable_mode === 'on_demand'
+                                    ? 'Consumables: Pull Only'
+                                    : 'Consumables: Auto-Send'}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium uppercase tracking-wide bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              {entry.frequency === 'on_demand'
+                                ? 'QR / On-Demand'
+                                : entry.frequency}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-slate-600 whitespace-nowrap">
+                            {entry.frequency === 'on_demand'
+                              ? 'Pull Only'
+                              : entry.next_run_date
+                              ? entry.next_run_date.split('T')[0]
+                              : 'N/A'}
+                          </td>
+                          <td className="py-3 px-3">
+                            <div className="text-xs text-slate-600 max-w-xs space-y-0.5">
+                              {(entry.line_items || []).map((li: any, idx: number) => {
+                                const cat = categories.find(
+                                  (c) => String(c.id) === String(li.category_id)
+                                );
+                                const isReusable = cat?.item_type === 'reusable';
+                                return (
+                                  <div
+                                    key={idx}
+                                    className="flex justify-between border-b border-dashed border-slate-100 pb-0.5 gap-2"
+                                  >
+                                    <span className="truncate">
+                                      {li.category_name}{' '}
+                                      {entry.is_stationed && (
+                                        <span className="text-[10px] text-slate-400">
+                                          ({isReusable ? 'at hub' : 'refill'})
+                                        </span>
+                                      )}
+                                    </span>
+                                    <span className="font-semibold text-slate-800 shrink-0">
+                                      x{li.quantity}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </td>
+                          <td className="py-3 px-3 text-right whitespace-nowrap space-x-1">
+                            <button
+                              type="button"
+                              onClick={() => handleCopyRefillLink(entry.id)}
+                              className={`text-xs font-medium px-2 py-1 rounded transition-colors inline-flex items-center gap-1 ${
+                                copiedId === entry.id
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : isPullMode
+                                  ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                  : 'text-slate-500 hover:bg-slate-100'
+                              }`}
+                              title="Copy pre-filled Refill URL (for QR code or bookmark)"
+                            >
+                              {copiedId === entry.id ? (
+                                <>
+                                  <Check className="w-3.5 h-3.5" /> Copied
+                                </>
+                              ) : (
+                                <>
+                                  <ExternalLink className="w-3.5 h-3.5" /> Refill Link
+                                </>
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleEditTemplate(entry)}
+                              className="text-blue-600 hover:text-blue-800 p-1 rounded hover:bg-blue-50 transition-colors"
+                              title="Edit Rule"
+                            >
+                              <Edit className="w-4 h-4 inline-block" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteTemplate(entry.id)}
+                              className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50 transition-colors"
+                              title="Archive Rule"
+                            >
+                              <Trash2 className="w-4 h-4 inline-block" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -3946,11 +4054,22 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
         </div>
 
         <div className="bg-slate-50 rounded-xl p-5 border border-slate-200 h-fit space-y-4">
-          <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wider">
-            Configure New Recurrence
-          </h3>
+          <div className="flex justify-between items-center">
+            <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wider">
+              {editingId ? 'Edit Rule / Hub' : 'Configure New Rule / Hub'}
+            </h3>
+            {editingId && (
+              <button
+                type="button"
+                onClick={resetForm}
+                className="text-xs text-slate-500 hover:text-slate-800"
+              >
+                Cancel Edit
+              </button>
+            )}
+          </div>
 
-          <form onSubmit={handleCreateTemplate} className="space-y-4 text-sm text-slate-700">
+          <form onSubmit={handleSaveTemplate} className="space-y-4 text-sm text-slate-700">
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1">Department</label>
               <select
@@ -3971,19 +4090,23 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Event Name</label>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Event / Hub / Breakroom Name
+              </label>
               <input
                 type="text"
                 required
                 value={eventName}
                 onChange={(e) => setEventName(e.target.value)}
-                placeholder="e.g. Planning Commission Meeting"
+                placeholder="e.g. Kona Planning Commission or DPW Breakroom"
                 className="w-full rounded-lg border-slate-300 focus:border-emerald-500 focus:ring-emerald-500 text-sm px-3 py-2 bg-white border"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Frequency</label>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Schedule / Trigger Mode
+              </label>
               <select
                 value={frequency}
                 onChange={(e) => setFrequency(e.target.value as any)}
@@ -3994,6 +4117,7 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
                 <option value="monthly_nth_weekday">Monthly (Nth Weekday)</option>
                 <option value="quarterly">Quarterly</option>
                 <option value="annually">Annually</option>
+                <option value="on_demand">On-Demand Only (QR Code / Breakroom Pull)</option>
               </select>
             </div>
 
@@ -4032,43 +4156,82 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
               </div>
             )}
 
-            <div>
-              <label className="flex items-start gap-2 cursor-pointer mt-2">
+            <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-3">
+              <label className="flex items-start gap-2 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={isStationed}
                   onChange={(e) => setIsStationed(e.target.checked)}
-                  className="mt-1 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                  className="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                 />
                 <div>
-                  <span className="block text-xs font-semibold text-slate-700">
-                    Items Relocated to Hub (Stationed)
+                  <span className="block text-xs font-semibold text-slate-800">
+                    Reusables Relocated Off-Site (Stationed Hub)
                   </span>
-                  <p className="text-[10px] text-slate-500">
-                    Deducts reusable allocation upfront for off-site partner hubs (e.g. West Hawaiʻi
-                    Civic Center) and spawns &lsquo;Stationed Usage&rsquo; tracking tickets.
+                  <p className="text-[11px] text-slate-500 leading-tight mt-0.5">
+                    Deducts <strong>only reusable</strong> items upfront while keeping consumables
+                    in Hilo inventory until replenished.
                   </p>
                 </div>
               </label>
+
+              {isStationed && frequency !== 'on_demand' && (
+                <div className="pt-2 border-t border-slate-100 space-y-2">
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Consumable Replenishment Mode
+                  </label>
+                  <select
+                    value={consumableMode}
+                    onChange={(e) => setConsumableMode(e.target.value as 'per_cycle' | 'on_demand')}
+                    className="w-full rounded-lg border-slate-300 text-xs px-2.5 py-2 bg-slate-50 border"
+                  >
+                    <option value="per_cycle">
+                      Send Per Cycle (Spawns Approved Consumable Ticket Each Cycle)
+                    </option>
+                    <option value="on_demand">
+                      Bulk Stash at Hub (Refill On-Demand via QR / Link Only)
+                    </option>
+                  </select>
+                </div>
+              )}
+
+              {!editingId &&
+                isStationed &&
+                (frequency === 'on_demand' || consumableMode === 'on_demand') && (
+                  <label className="flex items-center gap-2 cursor-pointer pt-1">
+                    <input
+                      type="checkbox"
+                      checked={spawnInitialStash}
+                      onChange={(e) => setSpawnInitialStash(e.target.checked)}
+                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <span className="text-[11px] text-slate-600">
+                      Also spawn an immediate <strong>Approved</strong> ticket for the initial
+                      consumable stash box today
+                    </span>
+                  </label>
+                )}
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">
-                First Event Date
-              </label>
-              <input
-                type="date"
-                required
-                value={nextRunDate}
-                onChange={(e) => setNextRunDate(e.target.value)}
-                className="w-full rounded-lg border-slate-300 focus:border-emerald-500 focus:ring-emerald-500 text-sm px-3 py-2 bg-white border text-slate-700"
-              />
-            </div>
+            {frequency !== 'on_demand' && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  Next Event Date
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={nextRunDate}
+                  onChange={(e) => setNextRunDate(e.target.value)}
+                  className="w-full rounded-lg border-slate-300 focus:border-emerald-500 focus:ring-emerald-500 text-sm px-3 py-2 bg-white border text-slate-700"
+                />
+              </div>
+            )}
 
             <div className="space-y-2">
               <div className="flex justify-between items-center">
                 <label className="block text-xs font-semibold text-slate-600">
-                  Reserved Line Items
+                  Template Line Items
                 </label>
                 <button
                   type="button"
@@ -4080,7 +4243,7 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
               </div>
               {lineItems.length === 0 ? (
                 <p className="text-xs text-slate-500 italic">
-                  No line items added yet. Click &ldquo;+ Add Item&rdquo; above.
+                  Click “+ Add Item” to configure reusables and/or consumables.
                 </p>
               ) : (
                 <div className="space-y-2 border-t border-slate-200 pt-2 max-h-48 overflow-y-auto pr-1">
@@ -4093,7 +4256,7 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
                       >
                         {categories.map((c) => (
                           <option key={c.id} value={c.id}>
-                            {c.name}
+                            {c.name} ({c.item_type === 'reusable' ? 'Reusable' : 'Consumable'})
                           </option>
                         ))}
                       </select>
@@ -4103,7 +4266,11 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
                         required
                         value={item.quantity}
                         onChange={(e) =>
-                          updateLineItem(idx, 'quantity', Math.max(1, parseInt(e.target.value, 10) || 1))
+                          updateLineItem(
+                            idx,
+                            'quantity',
+                            Math.max(1, parseInt(e.target.value, 10) || 1)
+                          )
                         }
                         className="w-16 rounded-lg border-slate-300 text-xs py-1.5 px-2 bg-white border text-slate-700"
                       />
@@ -4126,7 +4293,11 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
               disabled={submitting}
               className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white font-medium py-2.5 rounded-xl text-sm transition-colors cursor-pointer mt-2"
             >
-              {submitting ? 'Creating...' : 'Register Recurrence Rule'}
+              {submitting
+                ? 'Saving...'
+                : editingId
+                ? 'Save Rule Changes'
+                : 'Register Rule / Hub'}
             </button>
           </form>
         </div>
@@ -4135,18 +4306,27 @@ export function RecurringOrdersView({ fetchWithAuth }: { fetchWithAuth: any }) {
       <HelpModal
         isOpen={isHelpOpen}
         onClose={() => setIsHelpOpen(false)}
-        title="Recurring Requests Walkthrough"
+        title="Stationed Hubs & Breakroom Refill Modes"
       >
-        <ul className="list-disc pl-5 space-y-2">
+        <ul className="list-disc pl-5 space-y-2.5">
           <li>
-            <strong>30-Day Lookahead Spawner:</strong> When Cloud Scheduler triggers{' '}
-            <code>POST /api/cron/process-recurring</code>, any rule due within the next 30 days
-            spawns an Approved ticket in the Requests Queue and advances its next run date.
+            <strong>Option A — Stationed Hub + Per-Cycle Consumables:</strong> Check{' '}
+            <em>Reusables Relocated Off-Site</em> and keep{' '}
+            <em>Send Per Cycle</em>. Reusables are deducted once upfront; 30 days before each
+            meeting, the system logs a <code>Stationed Usage</code> reuse credit for the reusables
+            and spawns a separate <code>Approved</code> ticket containing <strong>only</strong> the
+            consumables you need to pack and send.
           </li>
           <li>
-            <strong>Stationed Hubs:</strong> Use the Stationed checkbox when reusable kits live
-            permanently with a partner department; archiving the rule returns reusable stock back to
-            OSCER's shelf count.
+            <strong>Option B — Stationed Hub + Bulk Consumable Stash:</strong> Switch Consumable
+            Mode to <em>Bulk Stash at Hub</em>. Reusables still log cycle reuse, while consumables
+            wait until the hub uses their <strong>Refill Link</strong>.
+          </li>
+          <li>
+            <strong>Breakroom Kanban (QR Pull):</strong> Set Schedule to{' '}
+            <em>On-Demand Only</em>, click <strong>Refill Link</strong>, and turn that URL into a QR
+            code on the breakroom bin. Scanning it pre-fills the public request form with that
+            breakroom’s exact restock items.
           </li>
         </ul>
       </HelpModal>
