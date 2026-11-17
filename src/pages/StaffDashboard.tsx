@@ -704,11 +704,16 @@ function RequestsView({
   fetchWithAuth: any;
 }) {
   const isReadOnly = currentUser?.role === 'audit';
+  const isAdminOrAbove =
+    currentUser?.role === 'admin' || currentUser?.role === 'super_admin';
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [requests, setRequests] = useState<Request[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false);
+  const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [bulkUploading, setBulkUploading] = useState(false);
   const [editingRequest, setEditingRequest] = useState<Request | null>(null);
   const [expandedRequest, setExpandedRequest] = useState<string | null>(null);
   const [page, setPage] = useState(0);
@@ -775,6 +780,85 @@ function RequestsView({
 
   const totalPages = Math.max(1, Math.ceil(filteredRequests.length / pageSize));
   const pagedRequests = filteredRequests.slice(page * pageSize, (page + 1) * pageSize);
+
+  const handleBulkUploadRequests = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!bulkFile) return;
+    setBulkUploading(true);
+    try {
+      const parseCSV = (str: string) => {
+        const arr: string[][] = [];
+        let quote = false;
+        for (let row = 0, col = 0, c = 0; c < str.length; c++) {
+          const cc = str[c];
+          const nc = str[c + 1];
+          arr[row] = arr[row] || [];
+          arr[row][col] = arr[row][col] || '';
+          if (cc === '"' && quote && nc === '"') {
+            arr[row][col] += cc;
+            ++c;
+            continue;
+          }
+          if (cc === '"') {
+            quote = !quote;
+            continue;
+          }
+          if (cc === ',' && !quote) {
+            ++col;
+            continue;
+          }
+          if (cc === '\r' && nc === '\n' && !quote) {
+            ++row;
+            col = 0;
+            ++c;
+            continue;
+          }
+          if ((cc === '\n' || cc === '\r') && !quote) {
+            ++row;
+            col = 0;
+            continue;
+          }
+          arr[row][col] += cc;
+        }
+        return arr;
+      };
+
+      const text = await bulkFile.text();
+      const rows = parseCSV(text);
+      const headers = (rows[0] || []).map((h) => h.trim());
+
+      const parsedItems = rows
+        .slice(1)
+        .filter((row) => row.length >= headers.length && row[0]?.trim() !== '')
+        .map((row) => {
+          const item: Record<string, string> = {};
+          headers.forEach((header, index) => {
+            item[header] = (row[index] ?? '').trim();
+          });
+          return item;
+        });
+
+      const response = await fetchWithAuth('/api/bulk-upload/requests', {
+        method: 'POST',
+        body: JSON.stringify({ items: parsedItems }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to import requests CSV');
+      }
+
+      alert(`Imported and reconciled ${data.count} requests!`);
+      setIsBulkUploadOpen(false);
+      setBulkFile(null);
+      fetchData();
+    } catch (error: any) {
+      console.error(error);
+      alert(`Import Error: ${error.message}`);
+    } finally {
+      setBulkUploading(false);
+    }
+  };
 
   const handleEditRequest = (req: Request) => {
     setEditingRequest(req);
@@ -942,6 +1026,14 @@ function RequestsView({
                   <Plus className="w-4 h-4" /> Add Request
                 </button>
               )}
+              {isAdminOrAbove && (
+                <button
+                  onClick={() => setIsBulkUploadOpen(true)}
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
+                >
+                  <Upload className="w-4 h-4" /> Import CSV
+                </button>
+              )}
               <button
                 onClick={() => exportToCSV(filteredRequests as any[], 'requests.csv')}
                 className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
@@ -1012,7 +1104,8 @@ function RequestsView({
           >
             <p>
               <strong>What is this page?</strong> Manage public and recurring item requests through
-              their lifecycle. All status transitions run inside atomic inventory transactions.
+              their lifecycle. All status transitions and CSV imports run inside atomic inventory
+              transactions.
             </p>
             <ul className="list-disc pl-5 space-y-2 mt-3">
               <li>
@@ -1207,7 +1300,8 @@ function RequestsView({
 
             {pagedRequests.length === 0 && (
               <div className="text-center py-12 text-slate-500 font-medium">
-                No matching requests found.
+                No matching requests found. (Check &ldquo;Checked-in&rdquo; above to view completed
+                historical requests.)
               </div>
             )}
 
@@ -1264,6 +1358,57 @@ function RequestsView({
             </ul>
           </div>
         </div>
+
+        {isBulkUploadOpen && isAdminOrAbove && (
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+              <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+                <h3 className="text-xl font-semibold text-slate-900">Import Historical Requests</h3>
+                <button
+                  onClick={() => setIsBulkUploadOpen(false)}
+                  className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+                >
+                  <X className="w-5 h-5 text-slate-500" />
+                </button>
+              </div>
+              <form onSubmit={handleBulkUploadRequests} className="p-6 space-y-6">
+                <div className="space-y-3">
+                  <p className="text-sm text-slate-600">
+                    Upload a CSV of requests (such as <code>legacy_requests_19_to_43.csv</code>).
+                    Inventory deductions, reservations, and lifetime counts are reconciled
+                    automatically and idempotently by request ID.
+                  </p>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-slate-700">CSV File</label>
+                    <input
+                      type="file"
+                      accept=".csv"
+                      required
+                      onChange={(e) => setBulkFile(e.target.files?.[0] || null)}
+                      className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none"
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsBulkUploadOpen(false)}
+                    className="flex-1 px-4 py-3 rounded-xl border border-slate-300 font-medium hover:bg-slate-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={bulkUploading || !bulkFile}
+                    className="flex-1 bg-emerald-600 text-white px-4 py-3 rounded-xl font-medium hover:bg-emerald-700 transition-colors disabled:opacity-50"
+                  >
+                    {bulkUploading ? 'Reconciling...' : 'Import & Reconcile'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
 
         {isFormOpen && !isReadOnly && (
           <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">

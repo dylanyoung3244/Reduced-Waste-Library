@@ -875,44 +875,214 @@ async function startServer(): Promise<void> {
       if (!items || !Array.isArray(items)) {
         return res.status(400).json({ error: 'Invalid payload' });
       }
+
+      const LEGACY_CATEGORY_ALIASES: Record<string, string> = {
+        'reuse plates': 'reusable plates',
+        'compost plates': 'compostable plates',
+        cups: 'reusable cups',
+        forks: 'compostable forks',
+        knifes: 'compostable knives',
+        knives: 'compostable knives',
+        spoons: 'compostable spoons',
+        'water jugs': 'reusable water jugs',
+        napkins: 'compostable napkins',
+        chopsticks: 'compostable chopsticks',
+      };
+
       try {
-        for (let i = 0; i < items.length; i += 450) {
-          const batch = db.batch();
-          for (const item of items.slice(i, i + 450)) {
-            const ref = item.id
-              ? db.collection('requests').doc(String(item.id))
-              : db.collection('requests').doc();
-            let parsedLineItems: any[] = [];
-            try {
-              parsedLineItems =
-                typeof item.line_items === 'string'
-                  ? JSON.parse(item.line_items)
-                  : item.line_items || [];
-            } catch {
-              parsedLineItems = [];
-            }
-            batch.set(
-              ref,
-              {
-                ...item,
-                line_items: parsedLineItems,
-                is_deleted: false,
-                status: item.status || 'Awaiting',
-              },
-              { merge: true }
+        let importedCount = 0;
+
+        // Process in chunks of 100 to stay comfortably under Firestore's 500-doc transaction limit
+        for (let offset = 0; offset < items.length; offset += 100) {
+          const chunk = items.slice(offset, offset + 100);
+          let chunkImported = 0;
+
+          await db.runTransaction(async (tx) => {
+            chunkImported = 0;
+            const catSnap = await tx.get(db.collection('categories'));
+            const catById = new Map<string, any>();
+            const catIdByLowerName = new Map<string, string>();
+            const catTypeMap = new Map<string, CategoryItemType>();
+
+            catSnap.forEach((doc) => {
+              const d = doc.data();
+              catById.set(doc.id, d);
+              const lower = String(d.name || '').trim().toLowerCase();
+              if (lower) catIdByLowerName.set(lower, doc.id);
+              catTypeMap.set(doc.id, inferCategoryItemType(d.name, d.item_type));
+            });
+
+            const docRefs = chunk.map((raw: any) =>
+              raw?.id
+                ? db.collection('requests').doc(String(raw.id).trim())
+                : db.collection('requests').doc()
             );
-          }
-          await batch.commit();
+            const existingDocs = await Promise.all(docRefs.map((ref) => tx.get(ref)));
+
+            const netStockDelta = new Map<string, number>();
+            const netDeployedDelta = new Map<string, number>();
+            const netLifetimeDelta = new Map<string, number>();
+
+            const accumulateDelta = (
+              cid: string,
+              stockDiff: number,
+              depDiff: number,
+              lifeDiff: number
+            ) => {
+              if (stockDiff !== 0) {
+                netStockDelta.set(cid, (netStockDelta.get(cid) || 0) + stockDiff);
+              }
+              if (depDiff !== 0) {
+                netDeployedDelta.set(cid, (netDeployedDelta.get(cid) || 0) + depDiff);
+              }
+              if (lifeDiff !== 0) {
+                netLifetimeDelta.set(cid, (netLifetimeDelta.get(cid) || 0) + lifeDiff);
+              }
+            };
+
+            chunk.forEach((raw: any, idx: number) => {
+              const ref = docRefs[idx];
+              const existingSnap = existingDocs[idx];
+              const existingData = existingSnap.exists ? (existingSnap.data() as any) : null;
+
+              let parsedLineItems: any[] = [];
+              try {
+                parsedLineItems =
+                  typeof raw.line_items === 'string'
+                    ? JSON.parse(raw.line_items)
+                    : Array.isArray(raw.line_items)
+                    ? raw.line_items
+                    : [];
+              } catch {
+                parsedLineItems = [];
+              }
+
+              const resolvedItems = parsedLineItems
+                .map((li: any) => {
+                  const rawCatId = String(li?.category_id || '').trim();
+                  const rawCatName = String(li?.category_name || '').trim();
+                  const lowerName = rawCatName.toLowerCase();
+                  const aliasedName = LEGACY_CATEGORY_ALIASES[lowerName] || lowerName;
+
+                  const matchedId =
+                    (rawCatId && catById.has(rawCatId) ? rawCatId : undefined) ||
+                    catIdByLowerName.get(aliasedName);
+
+                  if (!matchedId) return null;
+                  const canonicalCat = catById.get(matchedId);
+                  const qty = Math.floor(Number(li?.quantity) || 0);
+                  if (qty <= 0) return null;
+
+                  return {
+                    category_id: matchedId,
+                    category_name: canonicalCat?.name || rawCatName,
+                    quantity: qty,
+                    ...(li?.pack_hint ? { pack_hint: String(li.pack_hint) } : {}),
+                  };
+                })
+                .filter(Boolean) as any[];
+
+              const nextStatus = String(raw.status || 'Awaiting').trim();
+              const nextDeleted = raw.is_deleted === true || raw.is_deleted === 'true';
+
+              const oldFpMap = existingData
+                ? buildFootprintMap(
+                    existingData.line_items || [],
+                    existingData.status || 'Awaiting',
+                    Boolean(existingData.is_deleted),
+                    catTypeMap
+                  )
+                : new Map<string, CategoryFootprint>();
+
+              const newFpMap = buildFootprintMap(
+                resolvedItems,
+                nextStatus,
+                nextDeleted,
+                catTypeMap
+              );
+
+              const affectedCats = new Set<string>([
+                ...oldFpMap.keys(),
+                ...newFpMap.keys(),
+              ]);
+
+              for (const cid of affectedCats) {
+                const oldFp = oldFpMap.get(cid) || {
+                  stockDelta: 0,
+                  deployedDelta: 0,
+                  lifetimeDelta: 0,
+                };
+                const newFp = newFpMap.get(cid) || {
+                  stockDelta: 0,
+                  deployedDelta: 0,
+                  lifetimeDelta: 0,
+                };
+                accumulateDelta(
+                  cid,
+                  newFp.stockDelta - oldFp.stockDelta,
+                  newFp.deployedDelta - oldFp.deployedDelta,
+                  newFp.lifetimeDelta - oldFp.lifetimeDelta
+                );
+              }
+
+              tx.set(
+                ref,
+                {
+                  requester_name: String(raw.requester_name || 'Unknown').trim(),
+                  requester_email: String(raw.requester_email || '').trim(),
+                  requester_phone: String(raw.requester_phone || '').trim(),
+                  department: String(raw.department || 'Other').trim(),
+                  event_name: String(raw.event_name || 'Legacy Event').trim(),
+                  check_out_date: String(raw.check_out_date || '').trim(),
+                  check_in_date: String(raw.check_in_date || '').trim(),
+                  status: nextStatus,
+                  handled_by: String(raw.handled_by || req.user?.username || 'Legacy Import').trim(),
+                  created_at:
+                    raw.created_at || existingData?.created_at || new Date().toISOString(),
+                  ...(raw.legacy_id !== undefined && raw.legacy_id !== ''
+                    ? { request_id: Number(raw.legacy_id) || raw.legacy_id }
+                    : {}),
+                  is_deleted: nextDeleted,
+                  line_items: resolvedItems,
+                },
+                { merge: true }
+              );
+              chunkImported++;
+            });
+
+            const allUpdatedCatIds = new Set<string>([
+              ...netStockDelta.keys(),
+              ...netDeployedDelta.keys(),
+              ...netLifetimeDelta.keys(),
+            ]);
+
+            for (const cid of allUpdatedCatIds) {
+              if (!catById.has(cid)) continue;
+              const sDiff = netStockDelta.get(cid) || 0;
+              const dDiff = netDeployedDelta.get(cid) || 0;
+              const lDiff = netLifetimeDelta.get(cid) || 0;
+              if (sDiff !== 0 || dDiff !== 0 || lDiff !== 0) {
+                tx.update(db.collection('categories').doc(cid), {
+                  current_count: FieldValue.increment(sDiff),
+                  currently_deployed: FieldValue.increment(dDiff),
+                  total_checked_out: FieldValue.increment(lDiff),
+                });
+              }
+            }
+          });
+
+          importedCount += chunkImported;
         }
+
         await logAudit(
           req.user?.username,
           'BULK_UPLOAD',
-          `Uploaded ${items.length} requests via CSV`,
-          { count: items.length, target: 'requests' }
+          `Imported and reconciled ${importedCount} requests via CSV`,
+          { count: importedCount, target: 'requests' }
         );
-        res.json({ success: true, count: items.length });
-      } catch (error) {
-        res.status(500).json({ error: String(error) });
+        res.json({ success: true, count: importedCount });
+      } catch (error: any) {
+        res.status(error.statusCode || 500).json({ error: error.message || String(error) });
       }
     }
   );
