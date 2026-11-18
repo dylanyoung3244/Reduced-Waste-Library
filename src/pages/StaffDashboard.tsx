@@ -124,7 +124,6 @@ async function openProtectedReceipt(
 const exportToCSV = (data: Record<string, unknown>[], filename: string) => {
   if (!data || data.length === 0) return;
 
-  // Compute ordered union of keys across all records so optional Firestore fields never misalign columns
   const keySet = new Set<string>();
   for (const row of data) {
     Object.keys(row).forEach((k) => keySet.add(k));
@@ -134,8 +133,8 @@ const exportToCSV = (data: Record<string, unknown>[], filename: string) => {
   const escapeCsvCell = (val: unknown): string => {
     if (val === null || val === undefined) return '""';
     let str = typeof val === 'object' ? JSON.stringify(val) : String(val);
-    // Defuse spreadsheet formula injection when opened in Excel
-    if (/^[=+\-@]/.test(str)) {
+    // Block spreadsheet formula injection while allowing true negative numbers
+    if (/^[=+\-@]/.test(str) && !/^-[0-9]+(\.[0-9]+)?$/.test(str)) {
       str = `'${str}`;
     }
     return `"${str.replace(/"/g, '""')}"`;
@@ -574,8 +573,13 @@ function TabButton({
 function InventoryView({ fetchWithAuth }: { fetchWithAuth: any }) {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [reconciling, setReconciling] = useState(false);
 
-  useEffect(() => {
+  const savedUser = localStorage.getItem('user');
+  const isSuperAdmin = savedUser ? JSON.parse(savedUser)?.role === 'super_admin' : false;
+
+  const loadInventory = () => {
+    setLoading(true);
     fetchWithAuth('/api/admin/categories')
       .then((res: Response) => res.json())
       .then((data: any) => {
@@ -587,7 +591,32 @@ function InventoryView({ fetchWithAuth }: { fetchWithAuth: any }) {
         setInventory([]);
         setLoading(false);
       });
+  };
+
+  useEffect(() => {
+    loadInventory();
   }, []);
+
+  const handleReconcile = async () => {
+    if (
+      !confirm(
+        'Recompute all category stock, deployed, and lifetime counters from Orders, Requests, and Stationed Hubs?'
+      )
+    ) {
+      return;
+    }
+    setReconciling(true);
+    try {
+      const res = await fetchWithAuth('/api/admin/reconcile-inventory', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Reconciliation failed');
+      loadInventory();
+    } catch (err: any) {
+      alert(err.message || 'Error reconciling inventory');
+    } finally {
+      setReconciling(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -599,7 +628,7 @@ function InventoryView({ fetchWithAuth }: { fetchWithAuth: any }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-wrap justify-between items-center gap-3">
         <div>
           <h2 className="text-xl font-semibold text-slate-900">Real-Time Inventory</h2>
           <p className="text-xs text-slate-500 mt-0.5">
@@ -607,12 +636,24 @@ function InventoryView({ fetchWithAuth }: { fetchWithAuth: any }) {
             from physical On-Shelf stock.
           </p>
         </div>
-        <button
-          onClick={() => exportToCSV(inventory as any[], 'inventory.csv')}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
-        >
-          <Download className="w-4 h-4" /> Export to CSV
-        </button>
+        <div className="flex gap-2">
+          {isSuperAdmin && (
+            <button
+              onClick={handleReconcile}
+              disabled={reconciling}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl hover:bg-emerald-100 disabled:opacity-50 transition-colors"
+            >
+              <Check className="w-4 h-4" />
+              {reconciling ? 'Reconciling...' : 'Reconcile Counters'}
+            </button>
+          )}
+          <button
+            onClick={() => exportToCSV(inventory as any[], 'inventory.csv')}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
+          >
+            <Download className="w-4 h-4" /> Export to CSV
+          </button>
+        </div>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">

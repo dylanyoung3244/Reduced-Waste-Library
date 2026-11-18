@@ -2210,6 +2210,136 @@ async function startServer(): Promise<void> {
     }
   });
 
+  // Recomputes all category counters deterministically from Orders, Requests, and Stationed Hubs
+  app.post(
+    '/api/admin/reconcile-inventory',
+    authenticateToken,
+    requireSuperAdmin,
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const summary: Array<{
+          name: string;
+          total_procured: number;
+          current_count: number;
+          currently_deployed: number;
+          total_checked_out: number;
+        }> = [];
+
+        await db.runTransaction(async (tx) => {
+          summary.length = 0;
+          const [catSnap, invSnap, ordSnap, reqSnap, tplSnap] = await Promise.all([
+            tx.get(db.collection('categories')),
+            tx.get(db.collection('inventory')),
+            tx.get(db.collection('orders')),
+            tx.get(db.collection('requests')),
+            tx.get(db.collection('recurring_templates')),
+          ]);
+
+          const catMap = new Map<string, any>();
+          const catTypeMap = new Map<string, CategoryItemType>();
+          catSnap.forEach((doc) => {
+            const d = doc.data();
+            catMap.set(doc.id, d);
+            catTypeMap.set(doc.id, inferCategoryItemType(d.name, d.item_type));
+          });
+
+          const skuMap = new Map<string, any>();
+          invSnap.forEach((doc) => {
+            const d = doc.data();
+            skuMap.set(doc.id, d);
+            if (d.item_number) skuMap.set(String(d.item_number).trim(), d);
+          });
+
+          const procuredByCat = new Map<string, number>();
+          ordSnap.forEach((doc) => {
+            const order = doc.data();
+            if (order.is_deleted === true) return;
+            for (const li of order.line_items || []) {
+              const vItem = skuMap.get(String(li.item_number || '').trim());
+              if (!vItem) continue;
+              const qty = Math.max(0, Number(li.quantity) || 0);
+              const packSize = Number(vItem.pack_size) || 1;
+              for (const comp of vItem.kit_components || []) {
+                if (!comp?.category_id) continue;
+                const cid = String(comp.category_id);
+                const added = qty * packSize * (Number(comp.yield_multiplier) || 1);
+                procuredByCat.set(cid, (procuredByCat.get(cid) || 0) + added);
+              }
+            }
+          });
+
+          const stockDeltaByCat = new Map<string, number>();
+          const deployedByCat = new Map<string, number>();
+          const lifetimeByCat = new Map<string, number>();
+
+          reqSnap.forEach((doc) => {
+            const r = doc.data();
+            if (r.is_deleted === true) return;
+            const fpMap = buildFootprintMap(
+              r.line_items || [],
+              r.status || 'Awaiting',
+              false,
+              catTypeMap
+            );
+            for (const [cid, fp] of fpMap.entries()) {
+              stockDeltaByCat.set(cid, (stockDeltaByCat.get(cid) || 0) + fp.stockDelta);
+              deployedByCat.set(cid, (deployedByCat.get(cid) || 0) + fp.deployedDelta);
+              lifetimeByCat.set(cid, (lifetimeByCat.get(cid) || 0) + fp.lifetimeDelta);
+            }
+          });
+
+          tplSnap.forEach((doc) => {
+            const tpl = doc.data();
+            if (tpl.is_deleted === true || !tpl.is_stationed) return;
+            for (const li of tpl.line_items || []) {
+              const cid = String(li?.category_id || '');
+              if (catTypeMap.get(cid) === 'reusable') {
+                const qty = Math.max(0, Number(li?.quantity) || 0);
+                stockDeltaByCat.set(cid, (stockDeltaByCat.get(cid) || 0) - qty);
+                deployedByCat.set(cid, (deployedByCat.get(cid) || 0) + qty);
+              }
+            }
+          });
+
+          catSnap.forEach((doc) => {
+            const cid = doc.id;
+            const d = doc.data();
+            const total_procured = procuredByCat.get(cid) || 0;
+            const current_count = total_procured + (stockDeltaByCat.get(cid) || 0);
+            const currently_deployed = Math.max(0, deployedByCat.get(cid) || 0);
+            const total_checked_out = Math.max(0, lifetimeByCat.get(cid) || 0);
+
+            tx.update(doc.ref, {
+              total_procured,
+              current_count,
+              currently_deployed,
+              total_checked_out,
+            });
+
+            summary.push({
+              name: d.name,
+              total_procured,
+              current_count,
+              currently_deployed,
+              total_checked_out,
+            });
+          });
+        });
+
+        await logAudit(
+          req.user?.username,
+          'RECONCILED_INVENTORY',
+          'Recomputed all category inventory counters from underlying ledger',
+          { categories_updated: summary.length }
+        );
+
+        res.json({ success: true, summary });
+      } catch (error: any) {
+        res.status(error.statusCode || 500).json({ error: error.message || String(error) });
+      }
+    }
+  );
+
   app.post(
     '/api/categories',
     authenticateToken,
@@ -2966,9 +3096,13 @@ async function startServer(): Promise<void> {
 
             for (const [cid, qty] of reusableReturnMap.entries()) {
               if (qty > 0) {
+                const currentDep = Math.max(
+                  0,
+                  Number(existingCatMap.get(cid)?.currently_deployed) || 0
+                );
                 tx.update(db.collection('categories').doc(cid), {
                   current_count: FieldValue.increment(qty),
-                  currently_deployed: FieldValue.increment(-qty),
+                  currently_deployed: Math.max(0, currentDep - qty),
                 });
               }
             }
