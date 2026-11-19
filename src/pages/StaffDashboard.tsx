@@ -3621,6 +3621,13 @@ function UserManagementView({
   );
 }
 
+function parseFrontendEmails(raw: string): string[] {
+  return String(raw || '')
+    .split(/[,;\s]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s));
+}
+
 function SystemLogsSettingsView({
   currentUser,
   fetchWithAuth,
@@ -3631,13 +3638,17 @@ function SystemLogsSettingsView({
   const isSuperAdmin = currentUser?.role === 'super_admin';
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [logs, setLogs] = useState<any[]>([]);
-  const [settings, setSettings] = useState({
-    request_notification_email: '',
-    low_inventory_email: '',
-    allowed_domains: [] as string[],
-  });
+  const [transportMode, setTransportMode] = useState<'webhook' | 'smtp' | 'unconfigured'>(
+    'unconfigured'
+  );
+  const [requestEmails, setRequestEmails] = useState<string[]>([]);
+  const [lowStockEmails, setLowStockEmails] = useState<string[]>([]);
+  const [newReqEmail, setNewReqEmail] = useState('');
+  const [newLowEmail, setNewLowEmail] = useState('');
+  const [allowedDomains, setAllowedDomains] = useState<string[]>([]);
   const [newDomain, setNewDomain] = useState('');
   const [loading, setLoading] = useState(true);
+  const [testingEmail, setTestingEmail] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -3650,11 +3661,10 @@ function SystemLogsSettingsView({
         const settingsRes = await fetchWithAuth('/api/settings');
         const settingsData = await settingsRes.json();
         if (settingsRes.ok && settingsData && !settingsData.error) {
-          setSettings({
-            request_notification_email: settingsData.request_notification_email || '',
-            low_inventory_email: settingsData.low_inventory_email || '',
-            allowed_domains: settingsData.allowed_domains || [],
-          });
+          setRequestEmails(parseFrontendEmails(settingsData.request_notification_email || ''));
+          setLowStockEmails(parseFrontendEmails(settingsData.low_inventory_email || ''));
+          setAllowedDomains(settingsData.allowed_domains || []);
+          setTransportMode(settingsData.transport_mode || 'unconfigured');
         }
       }
     } catch (err) {
@@ -3668,21 +3678,86 @@ function SystemLogsSettingsView({
     fetchData();
   }, []);
 
+  const addEmailsToList = (
+    input: string,
+    currentList: string[],
+    setList: React.Dispatch<React.SetStateAction<string[]>>,
+    clearInput: () => void
+  ) => {
+    const parsed = parseFrontendEmails(input);
+    if (parsed.length === 0) {
+      if (input.trim()) alert('Please enter a valid email address.');
+      return;
+    }
+    setList(Array.from(new Set([...currentList, ...parsed])));
+    clearInput();
+  };
+
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
+    const finalReqEmails = Array.from(
+      new Set([...requestEmails, ...parseFrontendEmails(newReqEmail)])
+    );
+    const finalLowEmails = Array.from(
+      new Set([...lowStockEmails, ...parseFrontendEmails(newLowEmail)])
+    );
+
+    if (finalReqEmails.length === 0 || finalLowEmails.length === 0) {
+      alert('Please keep at least one recipient email in each notification list.');
+      return;
+    }
+
     try {
       const res = await fetchWithAuth('/api/settings', {
         method: 'PUT',
-        body: JSON.stringify(settings),
+        body: JSON.stringify({
+          request_notification_email: finalReqEmails.join(', '),
+          low_inventory_email: finalLowEmails.join(', '),
+          allowed_domains: allowedDomains,
+        }),
       });
+      const data = await res.json();
       if (res.ok) {
+        setNewReqEmail('');
+        setNewLowEmail('');
         alert('Settings saved successfully!');
         fetchData();
       } else {
-        alert('Failed to save settings');
+        alert(data.error || 'Failed to save settings');
       }
     } catch {
       alert('Error saving settings');
+    }
+  };
+
+  const handleSendTestEmail = async () => {
+    const targetEmails = Array.from(
+      new Set([...requestEmails, ...parseFrontendEmails(newReqEmail)])
+    );
+    if (targetEmails.length === 0) {
+      alert('Add at least one recipient email first.');
+      return;
+    }
+
+    setTestingEmail(true);
+    try {
+      const res = await fetchWithAuth('/api/settings/test-email', {
+        method: 'POST',
+        body: JSON.stringify({ to: targetEmails.join(', ') }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(
+          `Test email sent via ${data.mode.toUpperCase()} to:\n${(data.recipients || []).join(', ')}`
+        );
+        fetchData();
+      } else {
+        alert(data.error || 'Test email failed.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Network error while testing email.');
+    } finally {
+      setTestingEmail(false);
     }
   };
 
@@ -3690,17 +3765,14 @@ function SystemLogsSettingsView({
     const formatted = newDomain.trim().toLowerCase();
     if (!formatted) return;
     const withAt = formatted.startsWith('@') ? formatted : `@${formatted}`;
-    if (!settings.allowed_domains.includes(withAt)) {
-      setSettings({ ...settings, allowed_domains: [...settings.allowed_domains, withAt] });
+    if (!allowedDomains.includes(withAt)) {
+      setAllowedDomains([...allowedDomains, withAt]);
       setNewDomain('');
     }
   };
 
   const removeDomain = (domain: string) => {
-    setSettings({
-      ...settings,
-      allowed_domains: settings.allowed_domains.filter((d) => d !== domain),
-    });
+    setAllowedDomains(allowedDomains.filter((d) => d !== domain));
   };
 
   if (loading) {
@@ -3720,13 +3792,19 @@ function SystemLogsSettingsView({
               <h3 className="text-lg font-semibold text-slate-900 mb-2">Allowed Email Domains</h3>
               <p className="text-sm text-slate-600 mb-4">
                 Restrict public form submissions to these official County or State email suffixes
-                (remember to click Save Settings after editing).
+                (click <strong>Save All Settings</strong> on the right after editing).
               </p>
               <div className="flex gap-2 mb-4">
                 <input
                   type="text"
                   value={newDomain}
                   onChange={(e) => setNewDomain(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      addDomain();
+                    }
+                  }}
                   className="flex-1 px-4 py-2 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
                   placeholder="e.g. @hawaiicounty.gov"
                 />
@@ -3739,7 +3817,7 @@ function SystemLogsSettingsView({
                 </button>
               </div>
               <div className="flex flex-wrap gap-2">
-                {settings.allowed_domains.map((domain) => (
+                {allowedDomains.map((domain) => (
                   <span
                     key={domain}
                     className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 text-slate-700 rounded-lg text-sm font-medium shadow-sm"
@@ -3779,12 +3857,25 @@ function SystemLogsSettingsView({
           <HelpModal
             isOpen={isHelpOpen}
             onClose={() => setIsHelpOpen(false)}
-            title="Audit Trail & Settings"
+            title="Email Setup & Audit Trail Guide"
           >
             <p>
-              Every checkout, check-in, order entry, catalog edit, and user permission update writes
-              an immutable entry to the System Audit Logs.
+              <strong>Configuring Email Transport in AI Studio Secrets:</strong>
             </p>
+            <ul className="list-disc pl-5 space-y-2 mt-2">
+              <li>
+                <strong>Option 1 (Microsoft 365 Power Automate Webhook):</strong> Create a 2-step
+                Power Automate flow (<em>When an HTTP request is received</em> &rarr;{' '}
+                <em>Send an email V2</em> mapping <code>to</code>, <code>subject</code>,{' '}
+                <code>text</code>) and save its URL in AI Studio Secrets as{' '}
+                <code>EMAIL_WEBHOOK_URL</code>.
+              </li>
+              <li>
+                <strong>Option 2 (SMTP / Gmail):</strong> Set <code>SMTP_USER</code> and{' '}
+                <code>SMTP_PASS</code> (must be a 16-character Google App Password, not a standard
+                account password) inside AI Studio Secrets, then republish.
+              </li>
+            </ul>
           </HelpModal>
 
           <div className="overflow-x-auto bg-white border border-slate-200 rounded-xl shadow-sm max-h-[600px] overflow-y-auto">
@@ -3833,45 +3924,148 @@ function SystemLogsSettingsView({
         </div>
 
         {isSuperAdmin && (
-          <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 h-fit sticky top-6">
-            <h3 className="text-lg font-semibold text-slate-900 mb-4">
-              Email & Whitelist Settings
-            </h3>
-            <form onSubmit={handleSaveSettings} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  New Request Notification Email
-                </label>
-                <input
-                  type="email"
-                  required
-                  value={settings.request_notification_email}
-                  onChange={(e) =>
-                    setSettings({ ...settings, request_notification_email: e.target.value })
-                  }
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
-                />
+          <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 h-fit sticky top-6 space-y-5">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-lg font-semibold text-slate-900">Email Notifications</h3>
+              <span
+                className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full shrink-0 ${
+                  transportMode === 'unconfigured'
+                    ? 'bg-red-100 text-red-700'
+                    : 'bg-emerald-100 text-emerald-800'
+                }`}
+              >
+                {transportMode === 'unconfigured' ? 'Unconfigured' : `Active: ${transportMode}`}
+              </span>
+            </div>
+
+            {transportMode === 'unconfigured' && (
+              <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
+                No <code>SMTP_PASS</code> or <code>EMAIL_WEBHOOK_URL</code> detected on this server.
+                Add credentials in AI Studio Secrets and republish to enable email delivery.
               </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Low Inventory Warning Email
+            )}
+
+            <form onSubmit={handleSaveSettings} className="space-y-5">
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-700">
+                  New Request Recipients
                 </label>
-                <input
-                  type="email"
-                  required
-                  value={settings.low_inventory_email}
-                  onChange={(e) =>
-                    setSettings({ ...settings, low_inventory_email: e.target.value })
-                  }
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
-                />
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newReqEmail}
+                    onChange={(e) => setNewReqEmail(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        addEmailsToList(newReqEmail, requestEmails, setRequestEmails, () =>
+                          setNewReqEmail('')
+                        );
+                      }
+                    }}
+                    className="flex-1 px-3 py-1.5 text-sm rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                    placeholder="Add email(s)..."
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      addEmailsToList(newReqEmail, requestEmails, setRequestEmails, () =>
+                        setNewReqEmail('')
+                      )
+                    }
+                    className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {requestEmails.map((email) => (
+                    <span
+                      key={email}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-slate-200 text-slate-700 rounded-md text-xs font-medium"
+                    >
+                      {email}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setRequestEmails(requestEmails.filter((item) => item !== email))
+                        }
+                        className="text-slate-400 hover:text-red-500"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
               </div>
-              <div className="pt-2">
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-700">
+                  Low-Stock Alert Recipients
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newLowEmail}
+                    onChange={(e) => setNewLowEmail(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        addEmailsToList(newLowEmail, lowStockEmails, setLowStockEmails, () =>
+                          setNewLowEmail('')
+                        );
+                      }
+                    }}
+                    className="flex-1 px-3 py-1.5 text-sm rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                    placeholder="Add email(s)..."
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      addEmailsToList(newLowEmail, lowStockEmails, setLowStockEmails, () =>
+                        setNewLowEmail('')
+                      )
+                    }
+                    className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {lowStockEmails.map((email) => (
+                    <span
+                      key={email}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-slate-200 text-slate-700 rounded-md text-xs font-medium"
+                    >
+                      {email}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setLowStockEmails(lowStockEmails.filter((item) => item !== email))
+                        }
+                        className="text-slate-400 hover:text-red-500"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="pt-2 space-y-2">
                 <button
                   type="submit"
                   className="w-full bg-slate-900 text-white px-4 py-2 rounded-lg font-medium hover:bg-slate-800 transition-colors"
                 >
                   Save All Settings
+                </button>
+                <button
+                  type="button"
+                  disabled={testingEmail}
+                  onClick={handleSendTestEmail}
+                  className="w-full bg-white text-slate-700 border border-slate-300 px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-100 disabled:opacity-50 transition-colors"
+                >
+                  {testingEmail ? 'Sending Test...' : 'Send Test Email'}
                 </button>
               </div>
             </form>
@@ -3889,7 +4083,8 @@ function SystemLogsSettingsView({
                 {window.location.origin}/api/export/analytics
               </div>
               <p>
-                Pass your configured <code className="bg-slate-200 px-1 py-0.5 rounded">POWERBI_API_KEY</code> via the{' '}
+                Pass your configured{' '}
+                <code className="bg-slate-200 px-1 py-0.5 rounded">POWERBI_API_KEY</code> via the{' '}
                 <code className="bg-slate-200 px-1 py-0.5 rounded">x-api-key</code> HTTP header.
               </p>
             </div>

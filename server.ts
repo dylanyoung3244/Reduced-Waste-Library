@@ -118,6 +118,19 @@ function safeCompareSecret(provided: unknown, expected: string | undefined): boo
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
+function parseEmailList(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .flatMap((item) => String(item || '').split(/[,;\s]+/))
+      .map((e) => e.trim().toLowerCase())
+      .filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+  }
+  return String(raw || '')
+    .split(/[,;\s]+/)
+    .map((e) => e.trim().toLowerCase())
+    .filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+}
+
 function getMailTransporter(): nodemailer.Transporter | null {
   if (!process.env['SMTP_USER'] || !process.env['SMTP_PASS']) {
     return null;
@@ -131,6 +144,50 @@ function getMailTransporter(): nodemailer.Transporter | null {
       pass: process.env['SMTP_PASS'],
     },
   });
+}
+
+async function sendSystemEmail(params: {
+  to: unknown;
+  subject: string;
+  text: string;
+}): Promise<{ sent: boolean; mode: 'webhook' | 'smtp' | 'unconfigured'; recipients: string[] }> {
+  const recipients = Array.from(new Set(parseEmailList(params.to)));
+  if (recipients.length === 0) {
+    return { sent: false, mode: 'unconfigured', recipients: [] };
+  }
+
+  const webhookUrl = process.env['EMAIL_WEBHOOK_URL'];
+  if (webhookUrl) {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        to: recipients.join(';'),
+        recipients,
+        subject: params.subject,
+        text: params.text,
+      }),
+    });
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`Email webhook returned HTTP ${res.status}: ${errBody}`);
+    }
+    return { sent: true, mode: 'webhook', recipients };
+  }
+
+  const transporter = getMailTransporter();
+  if (!transporter) {
+    return { sent: false, mode: 'unconfigured', recipients };
+  }
+
+  await transporter.sendMail({
+    from: process.env['SMTP_FROM'] || process.env['SMTP_USER'],
+    to: recipients.join(', '),
+    subject: params.subject,
+    text: params.text,
+  });
+
+  return { sent: true, mode: 'smtp', recipients };
 }
 
 /**
@@ -424,23 +481,16 @@ async function startServer(): Promise<void> {
 
   async function dispatchLowStockAlerts(alerts: LowStockAlert[]): Promise<void> {
     if (alerts.length === 0) return;
-    const transporter = getMailTransporter();
-    if (!transporter) return;
-
     const settingsDoc = await db.collection('settings').doc('email_config').get();
     const settings = settingsDoc.data() || {};
-    const recipient = settings.low_inventory_email || process.env['NOTIFICATION_EMAIL'];
-    if (!recipient) return;
+    const recipientRaw = settings.low_inventory_email || process.env['NOTIFICATION_EMAIL'];
 
     for (const alert of alerts) {
-      transporter
-        .sendMail({
-          from: process.env['SMTP_USER'],
-          to: recipient,
-          subject: `Low Inventory: ${alert.categoryName}`,
-          text: `Warning: ${alert.categoryName} has fallen to ${alert.newCount} units. Alert threshold is ${alert.threshold}.`,
-        })
-        .catch((err) => console.error('Low stock email error:', err));
+      sendSystemEmail({
+        to: recipientRaw,
+        subject: `Low Inventory: ${alert.categoryName}`,
+        text: `Warning: ${alert.categoryName} has fallen to ${alert.newCount} units. Alert threshold is ${alert.threshold}.`,
+      }).catch((err) => console.error('Low stock email error:', err));
     }
   }
 
@@ -1220,7 +1270,12 @@ async function startServer(): Promise<void> {
   app.get('/api/settings', authenticateToken, requireSuperAdmin, async (_req, res) => {
     try {
       const doc = await db.collection('settings').doc('email_config').get();
-      res.json(doc.data() || {});
+      const transportMode = process.env['EMAIL_WEBHOOK_URL']
+        ? 'webhook'
+        : process.env['SMTP_USER'] && process.env['SMTP_PASS']
+        ? 'smtp'
+        : 'unconfigured';
+      res.json({ ...(doc.data() || {}), transport_mode: transportMode });
     } catch (error) {
       res.status(500).json({ error: String(error) });
     }
@@ -1232,9 +1287,18 @@ async function startServer(): Promise<void> {
     requireSuperAdmin,
     async (req: AuthenticatedRequest, res) => {
       try {
+        const reqEmails = parseEmailList(req.body.request_notification_email);
+        const lowEmails = parseEmailList(req.body.low_inventory_email);
+
+        if (reqEmails.length === 0 || lowEmails.length === 0) {
+          return res.status(400).json({
+            error: 'At least one valid email address is required for both notification lists.',
+          });
+        }
+
         const sanitized = {
-          request_notification_email: String(req.body.request_notification_email || '').trim(),
-          low_inventory_email: String(req.body.low_inventory_email || '').trim(),
+          request_notification_email: reqEmails.join(', '),
+          low_inventory_email: lowEmails.join(', '),
           allowed_domains: Array.isArray(req.body.allowed_domains)
             ? req.body.allowed_domains
                 .map((d: unknown) => String(d).trim().toLowerCase())
@@ -1242,10 +1306,55 @@ async function startServer(): Promise<void> {
             : DEFAULT_ALLOWED_DOMAINS,
         };
         await db.collection('settings').doc('email_config').set(sanitized, { merge: true });
-        await logAudit(req.user?.username, 'UPDATED_SETTINGS', 'Updated email & domain config', sanitized);
-        res.json({ success: true });
+        await logAudit(
+          req.user?.username,
+          'UPDATED_SETTINGS',
+          'Updated email & domain config',
+          sanitized
+        );
+        res.json({ success: true, settings: sanitized });
       } catch (error) {
         res.status(500).json({ error: String(error) });
+      }
+    }
+  );
+
+  app.post(
+    '/api/settings/test-email',
+    authenticateToken,
+    requireSuperAdmin,
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const doc = await db.collection('settings').doc('email_config').get();
+        const settings = doc.data() || {};
+        const target =
+          req.body?.to ||
+          settings.request_notification_email ||
+          process.env['NOTIFICATION_EMAIL'];
+
+        const result = await sendSystemEmail({
+          to: target,
+          subject: 'OSCER Reduced Waste Library \u2014 Test Notification',
+          text: `Aloha,\n\nThis is a live test notification triggered by ${req.user?.username} from the Reduced Waste Library Staff Dashboard.\n\nDelivery transport: ${
+            process.env['EMAIL_WEBHOOK_URL'] ? 'Webhook' : 'SMTP'
+          }\nTimestamp: ${new Date().toISOString()}`,
+        });
+
+        if (!result.sent) {
+          return res.status(400).json({
+            error:
+              'Email transport is not configured on this server. Set SMTP_USER + SMTP_PASS (16-char Google App Password) or EMAIL_WEBHOOK_URL in AI Studio Secrets and republish.',
+          });
+        }
+
+        await logAudit(req.user?.username, 'SENT_TEST_EMAIL', 'Sent test notification email', {
+          mode: result.mode,
+          recipients: result.recipients,
+        });
+        res.json({ success: true, mode: result.mode, recipients: result.recipients });
+      } catch (error: any) {
+        console.error('Test email failed:', error);
+        res.status(500).json({ error: `Email delivery failed: ${error.message || String(error)}` });
       }
     }
   );
@@ -1590,30 +1699,21 @@ async function startServer(): Promise<void> {
       await dispatchLowStockAlerts(lowStockAlerts);
 
       if (!isStaffEntry) {
-        const transporter = getMailTransporter();
-        if (transporter) {
-          const staffRecipient =
-            settings.request_notification_email || process.env['NOTIFICATION_EMAIL'];
-          if (staffRecipient) {
-            transporter
-              .sendMail({
-                from: process.env['SMTP_USER'],
-                to: staffRecipient,
-                subject: 'New Request Submitted',
-                text: `A new request has been submitted.\n\nRequester: ${requester_name}\nEmail: ${requester_email}\nDepartment: ${department}\nEvent: ${event_name}\nDates: ${check_out_date} to ${check_in_date}\n\nPlease check the Staff Dashboard.`,
-              })
-              .catch((err) => console.error(err));
-          }
-          if (requester_email) {
-            transporter
-              .sendMail({
-                from: process.env['SMTP_USER'],
-                to: requester_email,
-                subject: 'OSCER Request Received',
-                text: `Aloha ${requester_name},\n\nWe received your Reduced Waste Library request for "${event_name}". Our team will confirm within 2 business days.\n\nMahalo,\nThe OSCER Team`,
-              })
-              .catch((err) => console.error(err));
-          }
+        const staffRecipient =
+          settings.request_notification_email || process.env['NOTIFICATION_EMAIL'];
+        if (staffRecipient) {
+          sendSystemEmail({
+            to: staffRecipient,
+            subject: `New RWL Request: ${event_name}`,
+            text: `A new request has been submitted.\n\nRequester: ${requester_name}\nEmail: ${requester_email}\nDepartment: ${department}\nEvent: ${event_name}\nDates: ${check_out_date} to ${check_in_date}\n\nPlease check the Staff Dashboard.`,
+          }).catch((err) => console.error('Staff notification email failed:', err));
+        }
+        if (requester_email) {
+          sendSystemEmail({
+            to: requester_email,
+            subject: 'OSCER Request Received',
+            text: `Aloha ${requester_name},\n\nWe received your Reduced Waste Library request for "${event_name}". Our team will confirm within 2 business days.\n\nMahalo,\nThe OSCER Team`,
+          }).catch((err) => console.error('Requester receipt email failed:', err));
         }
       }
 
@@ -1706,17 +1806,11 @@ async function startServer(): Promise<void> {
         });
 
         if (oldStatus !== newStatus && newStatus === 'Approved' && requesterEmail) {
-          const transporter = getMailTransporter();
-          if (transporter) {
-            transporter
-              .sendMail({
-                from: process.env['SMTP_USER'],
-                to: requesterEmail,
-                subject: 'OSCER Request Approved',
-                text: `Aloha,\n\nYour Reduced Waste Library request for "${eventName}" has been approved! Please coordinate pickup with the OSCER team.`,
-              })
-              .catch((e) => console.error(e));
-          }
+          sendSystemEmail({
+            to: requesterEmail,
+            subject: 'OSCER Request Approved',
+            text: `Aloha,\n\nYour Reduced Waste Library request for "${eventName}" has been approved! Please coordinate pickup with the OSCER team.`,
+          }).catch((e) => console.error('Approval email failed:', e));
         }
 
         await dispatchLowStockAlerts(lowStockAlerts);
@@ -2525,7 +2619,8 @@ async function startServer(): Promise<void> {
             attachBulkPackHint(li, catDataMap.get(String(li.category_id)), isBulkMode)
           );
 
-          const notifyEmail = settings.request_notification_email || 'oscer@hawaiicounty.gov';
+          const notifyEmail =
+            parseEmailList(settings.request_notification_email)[0] || 'oscer@hawaiicounty.gov';
           const spawnedIds: string[] = [];
           const totalLifetimeIncrements = new Map<string, number>();
 
@@ -2858,7 +2953,8 @@ async function startServer(): Promise<void> {
             const starterRef = db.collection('requests').doc();
             tx.set(starterRef, {
               requester_name: `Initial Stash - ${templateData.department}`,
-              requester_email: settings.request_notification_email || 'oscer@hawaiicounty.gov',
+              requester_email:
+                parseEmailList(settings.request_notification_email)[0] || 'oscer@hawaiicounty.gov',
               requester_phone: '808-854-3129',
               department: templateData.department,
               event_name: `Initial Consumable Stash: ${templateData.event_name}`,
