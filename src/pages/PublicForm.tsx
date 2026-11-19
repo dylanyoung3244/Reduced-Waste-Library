@@ -186,7 +186,7 @@ export function PublicForm() {
               setError('');
               setRefillBanner(
                 bulkMode
-                  ? `Bulk Box Restock pre-filled for "${tpl.event_name}". Adjust box counts (or use A La Carte for smaller loose quantities) below.`
+                  ? `Bulk Box Restock pre-filled for "${tpl.event_name}". Adjust box/sleeve counts (or use A La Carte for smaller loose quantities) below.`
                   : `Pre-filled consumable restock for "${tpl.event_name}". Adjust quantities below if needed.`
               );
             } else {
@@ -730,8 +730,8 @@ export function PublicForm() {
           <div className="space-y-4">
             <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
               {isBulkRefillMode
-                ? 'Restock Quantities (Full Boxes / Sleeves or Loose Top-Ups)'
-                : 'A La Carte Top-Ups (Intervals of 10)'}
+                ? 'Restock Quantities (Full Sleeves / Boxes or Loose Top-Ups)'
+                : 'Sealed Sleeves / Boxes & Loose Top-Ups'}
             </h3>
 
             {sortedInventory
@@ -745,7 +745,7 @@ export function PublicForm() {
                 const imageUrl = (item as any).photo_url || item.image_url;
                 const step = getItemStep(item);
                 const hasBulkOption = Boolean(item.bulk_unit_size && item.bulk_unit_size > 0);
-                const bulkLabel = item.bulk_unit_label || 'Box';
+                const bulkLabel = item.bulk_unit_label || 'Sleeve';
 
                 return (
                   <div
@@ -756,9 +756,9 @@ export function PublicForm() {
                         : total > 0
                         ? 'border-emerald-200 bg-emerald-50/30'
                         : 'border-slate-100 bg-slate-50/50 hover:bg-slate-50'
-                    } transition-colors gap-4`}
+                    } transition-colors gap-3 md:gap-4`}
                   >
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
                       {imageUrl ? (
                         <div className="shrink-0 hidden sm:block">
                           <img
@@ -773,11 +773,13 @@ export function PublicForm() {
                           <Package className="w-5 h-5 text-slate-300" />
                         </div>
                       )}
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-medium text-slate-900">{categoryName}</h3>
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <h3 className="font-medium text-slate-900 leading-snug">
+                            {categoryName}
+                          </h3>
                           <span
-                            className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full ${
+                            className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full shrink-0 ${
                               item.item_type === 'reusable'
                                 ? 'bg-blue-50 text-blue-700 border border-blue-200'
                                 : 'bg-amber-50 text-amber-700 border border-amber-200'
@@ -786,9 +788,9 @@ export function PublicForm() {
                             {item.item_type === 'reusable' ? 'Reusable' : 'Compostable'}
                           </span>
                         </div>
-                        <p className="text-sm text-slate-500 mt-1">
+                        <p className="text-sm text-slate-500 mt-0.5">
                           {availableCount > 0 ? (
-                            <span className="text-emerald-600 font-medium">
+                            <span className="text-emerald-600 font-medium tabular-nums">
                               {availableCount} available
                             </span>
                           ) : (
@@ -798,54 +800,67 @@ export function PublicForm() {
                       </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-4 justify-end">
-                      <div className="text-right mr-1">
+                    <div className="flex items-end justify-between md:justify-end gap-3 shrink-0 pt-3 md:pt-0 border-t md:border-t-0 border-slate-200/70">
+                      <div className="text-left md:text-right md:w-20 shrink-0 tabular-nums pb-1">
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                          Total
+                        </div>
                         <div
-                          className={`text-sm font-medium ${
-                            isExceeded ? 'text-red-600' : 'text-slate-700'
+                          className={`text-base font-bold leading-tight ${
+                            isExceeded
+                              ? 'text-red-600'
+                              : total > 0
+                              ? 'text-emerald-700'
+                              : 'text-slate-700'
                           }`}
                         >
-                          Total Requested: {total}
+                          {total}
                         </div>
-                        {isExceeded && <div className="text-xs text-red-500">Exceeds inventory</div>}
+                        {isExceeded && (
+                          <div className="text-[10px] font-medium text-red-500 leading-tight">
+                            Over stock
+                          </div>
+                        )}
                       </div>
 
-                      <div className="w-px h-8 bg-slate-200 hidden md:block"></div>
+                      <div className="w-px h-10 bg-slate-200 hidden md:block shrink-0"></div>
 
-                      {hasBulkOption && (
-                        <div>
-                          <label className="block text-xs text-slate-500 mb-1">
-                            {bulkLabel} ({item.bulk_unit_size} ct)
+                      <div className="flex items-end gap-2.5 shrink-0">
+                        {hasBulkOption && (
+                          <div className="w-24 shrink-0">
+                            <label className="block text-[11px] font-medium text-slate-500 mb-1 whitespace-nowrap truncate">
+                              {bulkLabel} ({item.bulk_unit_size} ct)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={bulkBoxes[item.id] || ''}
+                              onChange={(e) => handleBulkBoxChange(item, e.target.value)}
+                              disabled={availableCount < (item.bulk_unit_size || 1)}
+                              className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all disabled:opacity-50 disabled:bg-slate-100 tabular-nums"
+                              placeholder="0"
+                            />
+                          </div>
+                        )}
+
+                        <div className="w-24 shrink-0">
+                          <label className="block text-[11px] font-medium text-slate-500 mb-1 whitespace-nowrap">
+                            A La Carte (+{step})
                           </label>
                           <input
                             type="number"
                             min="0"
-                            step="1"
-                            value={bulkBoxes[item.id] || ''}
-                            onChange={(e) => handleBulkBoxChange(item, e.target.value)}
-                            disabled={availableCount < (item.bulk_unit_size || 1)}
-                            className="w-20 px-3 py-2 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all disabled:opacity-50 disabled:bg-slate-100"
+                            step={step}
+                            value={quantities[item.id] || ''}
+                            onChange={(e) =>
+                              handleQuantityChange(item, e.target.value, availableCount)
+                            }
+                            disabled={availableCount <= 0}
+                            className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all disabled:opacity-50 disabled:bg-slate-100 tabular-nums"
                             placeholder="0"
                           />
                         </div>
-                      )}
-
-                      <div>
-                        <label className="block text-xs text-slate-500 mb-1">
-                          A La Carte (+{step})
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          step={step}
-                          value={quantities[item.id] || ''}
-                          onChange={(e) =>
-                            handleQuantityChange(item, e.target.value, availableCount)
-                          }
-                          disabled={availableCount <= 0}
-                          className="w-24 px-3 py-2 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all disabled:opacity-50 disabled:bg-slate-100"
-                          placeholder="0"
-                        />
                       </div>
                     </div>
                   </div>

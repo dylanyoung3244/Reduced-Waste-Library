@@ -31,6 +31,7 @@ import {
   History,
   BookOpen,
 } from 'lucide-react';
+import { StaffGuideModal, StaffGuideButton } from '../lib/staffGuides';
 
 const hawaiiCountyDepartments = [
   'Animal Control and Protection Agency',
@@ -239,33 +240,11 @@ const HelpModal = ({
   onClose: () => void;
   title: string;
   children: React.ReactNode;
-}) => {
-  if (!isOpen) return null;
-  return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col">
-        <div className="flex justify-between items-center p-6 border-b border-slate-100">
-          <h2 className="text-2xl font-bold text-slate-900">{title}</h2>
-          <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-slate-700 text-2xl font-bold leading-none"
-          >
-            &times;
-          </button>
-        </div>
-        <div className="p-6 overflow-y-auto text-slate-700 space-y-4 text-left">{children}</div>
-        <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end rounded-b-2xl">
-          <button
-            onClick={onClose}
-            className="px-5 py-2 bg-emerald-600 text-white rounded-xl font-medium hover:bg-emerald-700 transition-colors"
-          >
-            Understood
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
+}) => (
+  <StaffGuideModal isOpen={isOpen} onClose={onClose} title={title}>
+    {children}
+  </StaffGuideModal>
+);
 
 export function StaffDashboard() {
   const [activeTab, setActiveTab] = useState<
@@ -636,7 +615,7 @@ function InventoryView({ fetchWithAuth }: { fetchWithAuth: any }) {
             from physical On-Shelf stock.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {isSuperAdmin && (
             <button
               onClick={handleReconcile}
@@ -653,6 +632,7 @@ function InventoryView({ fetchWithAuth }: { fetchWithAuth: any }) {
           >
             <Download className="w-4 h-4" /> Export to CSV
           </button>
+          <StaffGuideButton tab="inventory" />
         </div>
       </div>
       <div className="overflow-x-auto">
@@ -2189,12 +2169,15 @@ function ProcurementHistoryView({
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
         <h2 className="text-xl font-semibold text-slate-900">Procurement History</h2>
-        <button
-          onClick={() => exportToCSV(filteredOrders, 'procurement_history.csv')}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
-        >
-          <Download className="w-4 h-4" /> Export to CSV
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => exportToCSV(filteredOrders, 'procurement_history.csv')}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
+          >
+            <Download className="w-4 h-4" /> Export to CSV
+          </button>
+          <StaffGuideButton tab="history" />
+        </div>
       </div>
 
       <div className="relative w-full">
