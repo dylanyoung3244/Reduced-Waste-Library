@@ -1092,6 +1092,9 @@ async function startServer(): Promise<void> {
                   ...(raw.legacy_id !== undefined && raw.legacy_id !== ''
                     ? { request_id: Number(raw.legacy_id) || raw.legacy_id }
                     : {}),
+                  ...(raw.notes !== undefined
+                    ? { notes: String(raw.notes).slice(0, 5000).trim() }
+                    : {}),
                   is_deleted: nextDeleted,
                   line_items: resolvedItems,
                 },
@@ -1544,6 +1547,7 @@ async function startServer(): Promise<void> {
       line_items,
       status: requestedStatus,
       handled_by,
+      notes,
     } = req.body;
 
     const cleanItems = (Array.isArray(line_items) ? line_items : [])
@@ -1568,6 +1572,7 @@ async function startServer(): Promise<void> {
     }
 
     const targetStatus = isStaffEntry && requestedStatus ? String(requestedStatus) : 'Awaiting';
+    const cleanNotes = isStaffEntry ? String(notes || '').slice(0, 5000).trim() : '';
     const lowStockAlerts: LowStockAlert[] = [];
 
     try {
@@ -1625,7 +1630,6 @@ async function startServer(): Promise<void> {
           catTypeMap.set(catIds[idx], inferCategoryItemType(d.name, d.item_type));
         });
 
-        // Atomic server-side ATP check for public form submissions
         if (!isStaffEntry) {
           const exceeded: string[] = [];
           for (const item of cleanItems) {
@@ -1683,6 +1687,7 @@ async function startServer(): Promise<void> {
           check_in_date: check_in_date || '',
           status: targetStatus,
           handled_by: handled_by || staffUser?.username || '',
+          notes: cleanNotes,
           is_deleted: false,
           created_at: new Date().toISOString(),
           line_items: cleanItems,
@@ -1844,6 +1849,7 @@ async function startServer(): Promise<void> {
         status,
         line_items,
         handled_by,
+        notes,
       } = req.body;
 
       const lowStockAlerts: LowStockAlert[] = [];
@@ -1927,6 +1933,10 @@ async function startServer(): Promise<void> {
             status: nextStatus,
             line_items: newItems,
             handled_by: handled_by || existing.handled_by || req.user?.username || '',
+            notes:
+              notes !== undefined
+                ? String(notes || '').slice(0, 5000).trim()
+                : existing.notes || '',
           });
         });
 
@@ -1940,6 +1950,35 @@ async function startServer(): Promise<void> {
         res.json({ success: true });
       } catch (error: any) {
         res.status(error.statusCode || 500).json({ error: error.message || String(error) });
+      }
+    }
+  );
+
+  app.put(
+    '/api/requests/:id/notes',
+    authenticateToken,
+    requireOperator,
+    async (req: AuthenticatedRequest, res) => {
+      const { id } = req.params;
+      const cleanNotes = String(req.body?.notes || '').slice(0, 5000).trim();
+
+      try {
+        const reqRef = db.collection('requests').doc(id);
+        const reqDoc = await reqRef.get();
+        if (!reqDoc.exists) {
+          return res.status(404).json({ error: 'Request not found' });
+        }
+
+        await reqRef.update({ notes: cleanNotes });
+        await logAudit(
+          req.user?.username,
+          'UPDATED_REQUEST_NOTES',
+          `Updated staff notes on request ${id}`,
+          { request_id: id, has_notes: Boolean(cleanNotes) }
+        );
+        res.json({ success: true, notes: cleanNotes });
+      } catch (error: any) {
+        res.status(500).json({ error: error.message || String(error) });
       }
     }
   );

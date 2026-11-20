@@ -737,6 +737,9 @@ function RequestsView({
   const [bulkUploading, setBulkUploading] = useState(false);
   const [editingRequest, setEditingRequest] = useState<Request | null>(null);
   const [expandedRequest, setExpandedRequest] = useState<string | null>(null);
+  const [editingNoteReqId, setEditingNoteReqId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState('');
+  const [savingNote, setSavingNote] = useState(false);
   const [page, setPage] = useState(0);
   const pageSize = 50;
 
@@ -758,6 +761,7 @@ function RequestsView({
     check_out_date: '',
     check_in_date: '',
     status: 'Awaiting',
+    notes: '',
   });
   const [requestLineItems, setRequestLineItems] = useState<any[]>([]);
 
@@ -795,12 +799,36 @@ function RequestsView({
       return (
         (req.requester_name || '').toLowerCase().includes(term) ||
         (req.department || '').toLowerCase().includes(term) ||
-        (req.event_name || '').toLowerCase().includes(term)
+        (req.event_name || '').toLowerCase().includes(term) ||
+        (req.notes || '').toLowerCase().includes(term)
       );
     });
 
   const totalPages = Math.max(1, Math.ceil(filteredRequests.length / pageSize));
   const pagedRequests = filteredRequests.slice(page * pageSize, (page + 1) * pageSize);
+
+  const handleSaveInlineNote = async (reqId: string) => {
+    setSavingNote(true);
+    try {
+      const res = await fetchWithAuth(`/api/requests/${reqId}/notes`, {
+        method: 'PUT',
+        body: JSON.stringify({ notes: noteDraft }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to save notes');
+      }
+      setRequests((prev) =>
+        prev.map((r) => (r.id === reqId ? { ...r, notes: data.notes ?? noteDraft.trim() } : r))
+      );
+      setEditingNoteReqId(null);
+    } catch (err: any) {
+      console.error(err);
+      alert(err.message || 'Error saving notes');
+    } finally {
+      setSavingNote(false);
+    }
+  };
 
   const handleBulkUploadRequests = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -892,6 +920,7 @@ function RequestsView({
       check_out_date: req.check_out_date,
       check_in_date: req.check_in_date,
       status: req.status,
+      notes: req.notes || '',
     });
     setRequestLineItems(req.line_items || []);
     setIsFormOpen(true);
@@ -978,6 +1007,7 @@ function RequestsView({
         check_out_date: '',
         check_in_date: '',
         status: 'Awaiting',
+        notes: '',
       });
       setRequestLineItems([]);
       fetchData();
@@ -1038,6 +1068,7 @@ function RequestsView({
                       check_out_date: '',
                       check_in_date: '',
                       status: 'Awaiting',
+                      notes: '',
                     });
                     setRequestLineItems([]);
                     setIsFormOpen(true);
@@ -1111,7 +1142,7 @@ function RequestsView({
             <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-400" />
             <input
               type="text"
-              placeholder="Search by requester, department, or event name..."
+              placeholder="Search by requester, department, event name, or staff notes..."
               className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 outline-none shadow-sm"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -1128,196 +1159,249 @@ function RequestsView({
               their lifecycle. All status transitions and CSV imports run inside atomic inventory
               transactions.
             </p>
-            <ul className="list-disc pl-5 space-y-2 mt-3">
-              <li>
-                <span className="bg-amber-100 font-semibold px-1.5 py-0.5 rounded">Awaiting:</span>{' '}
-                New request; items are reserved from public Available-to-Promise (ATP).
-              </li>
-              <li>
-                <span className="bg-blue-100 font-semibold px-1.5 py-0.5 rounded">Approved:</span>{' '}
-                Emails the requester confirming approval and keeps items reserved in ATP.
-              </li>
-              <li>
-                <span className="bg-sky-100 font-semibold px-1.5 py-0.5 rounded">
-                  Awaiting Pick Up:
-                </span>{' '}
-                Box is packed and staged for pickup.
-              </li>
-              <li>
-                <span className="bg-purple-100 font-semibold px-1.5 py-0.5 rounded">
-                  Checked-out:
-                </span>{' '}
-                Deducts physical On-Shelf inventory, increments Lifetime Issued, and triggers
-                Low-Stock alerts if needed.
-              </li>
-              <li>
-                <span className="bg-emerald-100 font-semibold px-1.5 py-0.5 rounded">
-                  Checked-in:
-                </span>{' '}
-                Returns <strong>Reusable</strong> items to On-Shelf stock while keeping{' '}
-                <strong>Consumable</strong> items permanently consumed.
-              </li>
-              <li>
-                <span className="bg-red-100 font-semibold px-1.5 py-0.5 rounded">Denied:</span>{' '}
-                Releases reservations (or reverses deductions if previously checked out).
-              </li>
-            </ul>
           </HelpModal>
 
           <div className="grid grid-cols-1 gap-2">
-            {pagedRequests.map((req) => (
-              <div
-                key={req.id}
-                className="border border-slate-200 rounded-xl overflow-hidden bg-white hover:border-slate-300 transition-colors"
-              >
+            {pagedRequests.map((req) => {
+              const hasNotes = Boolean(req.notes && req.notes.trim().length > 0);
+              const isEditingThisNote = editingNoteReqId === req.id;
+
+              return (
                 <div
-                  className="flex items-center justify-between p-4 cursor-pointer"
-                  onClick={() => setExpandedRequest(expandedRequest === req.id ? null : req.id)}
+                  key={req.id}
+                  className="border border-slate-200 rounded-xl overflow-hidden bg-white hover:border-slate-300 transition-colors"
                 >
-                  <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 min-w-0">
-                    <div className="font-semibold text-slate-900 truncate">
-                      {req.requester_name}
-                    </div>
-                    <div className="text-slate-600 truncate">{req.event_name}</div>
-                    <div className="text-sm text-slate-500">
-                      {req.check_out_date} &rarr; {req.check_in_date}
-                    </div>
-                  </div>
                   <div
-                    className="flex items-center gap-4 ml-4"
-                    onClick={(e) => e.stopPropagation()}
+                    className="flex items-center justify-between p-4 cursor-pointer"
+                    onClick={() => {
+                      const nextExpanded = expandedRequest === req.id ? null : req.id;
+                      setExpandedRequest(nextExpanded);
+                      if (editingNoteReqId && editingNoteReqId !== nextExpanded) {
+                        setEditingNoteReqId(null);
+                      }
+                    }}
                   >
-                    <select
-                      disabled={isReadOnly}
-                      value={req.status}
-                      onChange={(e) => updateStatus(req.id, e.target.value)}
-                      className={`px-3 py-1.5 rounded-lg text-sm font-medium border-0 outline-none ${
-                        isReadOnly ? 'cursor-not-allowed opacity-80' : 'cursor-pointer'
-                      } ${
-                        req.status === 'Awaiting'
-                          ? 'bg-amber-100 text-amber-800'
-                          : req.status === 'Approved'
-                          ? 'bg-blue-100 text-blue-800'
-                          : req.status === 'Awaiting Pick Up'
-                          ? 'bg-sky-100 text-sky-800'
-                          : req.status === 'Checked-out'
-                          ? 'bg-purple-100 text-purple-800'
-                          : req.status === 'Checked-in'
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : req.status === 'Test'
-                          ? 'bg-slate-200 text-slate-700'
-                          : 'bg-red-100 text-red-800'
-                      }`}
-                    >
-                      <option value="Awaiting">Awaiting</option>
-                      <option value="Approved">Approved</option>
-                      <option value="Awaiting Pick Up">Awaiting Pick Up</option>
-                      <option value="Checked-out">Checked-out</option>
-                      <option value="Checked-in">Checked-in</option>
-                      <option value="Denied">Denied</option>
-                      <option value="Stationed Usage">Stationed Usage</option>
-                      <option value="Test">Test</option>
-                    </select>
-                    {expandedRequest === req.id ? (
-                      <ChevronUp className="w-5 h-5 text-slate-400" />
-                    ) : (
-                      <ChevronDown className="w-5 h-5 text-slate-400" />
-                    )}
-                  </div>
-                </div>
-
-                {expandedRequest === req.id && (
-                  <div className="px-4 pb-4 pt-2 border-t border-slate-50 bg-slate-50/30">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="space-y-4">
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="col-span-2">
-                            <div className="text-xs font-semibold text-slate-400 uppercase">
-                              Contact Information
-                            </div>
-                            <div className="text-sm text-slate-700">
-                              {req.requester_email && <div>Email: {req.requester_email}</div>}
-                              {req.requester_phone && <div>Phone: {req.requester_phone}</div>}
-                              {!req.requester_email && !req.requester_phone && (
-                                <span className="text-slate-400 italic">
-                                  No contact info provided
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-xs font-semibold text-slate-400 uppercase">
-                              Department
-                            </div>
-                            <div className="text-sm text-slate-700">{req.department}</div>
-                          </div>
-                          <div>
-                            <div className="text-xs font-semibold text-slate-400 uppercase">
-                              Handled By
-                            </div>
-                            <div className="text-sm text-slate-700">
-                              {req.handled_by || 'Unassigned'}
-                            </div>
-                          </div>
-                        </div>
-
-                        {!isReadOnly && (
-                          <div className="flex gap-2">
-                            {showDeleted ? (
-                              <button
-                                onClick={() => handleRestoreRequest(req.id)}
-                                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-emerald-600 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition-colors"
-                              >
-                                <Check className="w-4 h-4" /> Restore
-                              </button>
-                            ) : (
-                              <>
-                                <button
-                                  onClick={() => handleEditRequest(req)}
-                                  className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
-                                >
-                                  <Edit className="w-4 h-4" /> Edit Request
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteRequest(req.id)}
-                                  className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors"
-                                >
-                                  <Trash2 className="w-4 h-4" /> Delete
-                                </button>
-                              </>
-                            )}
-                          </div>
+                    <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 min-w-0">
+                      <div className="font-semibold text-slate-900 truncate flex items-center gap-2">
+                        <span className="truncate">{req.requester_name}</span>
+                        {hasNotes && (
+                          <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 shrink-0">
+                            Note
+                          </span>
                         )}
                       </div>
+                      <div className="text-slate-600 truncate">{req.event_name}</div>
+                      <div className="text-sm text-slate-500">
+                        {req.check_out_date} &rarr; {req.check_in_date}
+                      </div>
+                    </div>
+                    <div
+                      className="flex items-center gap-4 ml-4"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <select
+                        disabled={isReadOnly}
+                        value={req.status}
+                        onChange={(e) => updateStatus(req.id, e.target.value)}
+                        className={`px-3 py-1.5 rounded-lg text-sm font-medium border-0 outline-none ${
+                          isReadOnly ? 'cursor-not-allowed opacity-80' : 'cursor-pointer'
+                        } ${
+                          req.status === 'Awaiting'
+                            ? 'bg-amber-100 text-amber-800'
+                            : req.status === 'Approved'
+                            ? 'bg-blue-100 text-blue-800'
+                            : req.status === 'Awaiting Pick Up'
+                            ? 'bg-sky-100 text-sky-800'
+                            : req.status === 'Checked-out'
+                            ? 'bg-purple-100 text-purple-800'
+                            : req.status === 'Checked-in'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : req.status === 'Test'
+                            ? 'bg-slate-200 text-slate-700'
+                            : 'bg-red-100 text-red-800'
+                        }`}
+                      >
+                        <option value="Awaiting">Awaiting</option>
+                        <option value="Approved">Approved</option>
+                        <option value="Awaiting Pick Up">Awaiting Pick Up</option>
+                        <option value="Checked-out">Checked-out</option>
+                        <option value="Checked-in">Checked-in</option>
+                        <option value="Denied">Denied</option>
+                        <option value="Stationed Usage">Stationed Usage</option>
+                        <option value="Test">Test</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextExpanded = expandedRequest === req.id ? null : req.id;
+                          setExpandedRequest(nextExpanded);
+                          if (editingNoteReqId && editingNoteReqId !== nextExpanded) {
+                            setEditingNoteReqId(null);
+                          }
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600"
+                        aria-label="Expand request details"
+                      >
+                        {expandedRequest === req.id ? (
+                          <ChevronUp className="w-5 h-5" />
+                        ) : (
+                          <ChevronDown className="w-5 h-5" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
 
-                      <div className="bg-white rounded-xl border border-slate-200 p-3">
-                        <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                          Requested Items
-                        </h4>
-                        <ul className="space-y-1.5">
-                          {(req.line_items || []).map((item, index) => (
-                            <li
-                              key={`${item.category_id}-${index}`}
-                              className="text-sm text-slate-700 flex justify-between items-start gap-2"
-                            >
-                              <div>
-                                <span>{item.category_name}</span>
-                                {item.pack_hint && (
-                                  <span className="block text-[11px] text-slate-400">
-                                    {item.pack_hint}
+                  {expandedRequest === req.id && (
+                    <div className="px-4 pb-4 pt-2 border-t border-slate-50 bg-slate-50/30 space-y-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="col-span-2">
+                              <div className="text-xs font-semibold text-slate-400 uppercase">
+                                Contact Information
+                              </div>
+                              <div className="text-sm text-slate-700">
+                                {req.requester_email && <div>Email: {req.requester_email}</div>}
+                                {req.requester_phone && <div>Phone: {req.requester_phone}</div>}
+                                {!req.requester_email && !req.requester_phone && (
+                                  <span className="text-slate-400 italic">
+                                    No contact info provided
                                   </span>
                                 )}
                               </div>
-                              <span className="font-semibold shrink-0">{item.quantity}</span>
-                            </li>
-                          ))}
-                        </ul>
+                            </div>
+                            <div>
+                              <div className="text-xs font-semibold text-slate-400 uppercase">
+                                Department
+                              </div>
+                              <div className="text-sm text-slate-700">{req.department}</div>
+                            </div>
+                            <div>
+                              <div className="text-xs font-semibold text-slate-400 uppercase">
+                                Handled By
+                              </div>
+                              <div className="text-sm text-slate-700">
+                                {req.handled_by || 'Unassigned'}
+                              </div>
+                            </div>
+                          </div>
+
+                          {!isReadOnly && (
+                            <div className="flex flex-wrap gap-2">
+                              {showDeleted ? (
+                                <button
+                                  onClick={() => handleRestoreRequest(req.id)}
+                                  className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-emerald-600 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition-colors"
+                                >
+                                  <Check className="w-4 h-4" /> Restore
+                                </button>
+                              ) : (
+                                <>
+                                  <button
+                                    onClick={() => handleEditRequest(req)}
+                                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+                                  >
+                                    <Edit className="w-4 h-4" /> Edit Request
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteRequest(req.id)}
+                                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors"
+                                  >
+                                    <Trash2 className="w-4 h-4" /> Delete
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="bg-white rounded-xl border border-slate-200 p-3">
+                          <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                            Requested Items
+                          </h4>
+                          <ul className="space-y-1.5">
+                            {(req.line_items || []).map((item, index) => (
+                              <li
+                                key={`${item.category_id}-${index}`}
+                                className="text-sm text-slate-700 flex justify-between items-start gap-2"
+                              >
+                                <div>
+                                  <span>{item.category_name}</span>
+                                  {item.pack_hint && (
+                                    <span className="block text-[11px] text-slate-400">
+                                      {item.pack_hint}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="font-semibold shrink-0">{item.quantity}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+
+                      {/* Multiline Staff Notes Section inside Expanded Caret Drawer */}
+                      <div className="bg-white rounded-xl border border-slate-200 p-3.5">
+                        <div className="flex items-center justify-between mb-2">
+                          <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                            Staff Notes
+                          </h4>
+                          {!isReadOnly && !showDeleted && !isEditingThisNote && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingNoteReqId(req.id);
+                                setNoteDraft(req.notes || '');
+                              }}
+                              className="text-xs font-medium text-emerald-600 hover:text-emerald-800 flex items-center gap-1"
+                            >
+                              <Edit className="w-3.5 h-3.5" />
+                              {hasNotes ? 'Edit Notes' : 'Add Notes'}
+                            </button>
+                          )}
+                        </div>
+
+                        {isEditingThisNote ? (
+                          <div className="space-y-2.5">
+                            <textarea
+                              rows={3}
+                              value={noteDraft}
+                              onChange={(e) => setNoteDraft(e.target.value)}
+                              placeholder="Add pickup coordination details, missing/damaged return notes, or special instructions..."
+                              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none resize-y"
+                            />
+                            <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setEditingNoteReqId(null)}
+                                disabled={savingNote}
+                                className="px-3 py-1.5 text-xs font-medium text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleSaveInlineNote(req.id)}
+                                disabled={savingNote}
+                                className="px-3 py-1.5 text-xs font-medium text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                              >
+                                {savingNote ? 'Saving...' : 'Save Notes'}
+                              </button>
+                            </div>
+                          </div>
+                        ) : hasNotes ? (
+                          <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
+                            {req.notes}
+                          </p>
+                        ) : (
+                          <p className="text-sm text-slate-400 italic">No staff notes recorded.</p>
+                        )}
                       </div>
                     </div>
-                  </div>
-                )}
-              </div>
-            ))}
+                  )}
+                </div>
+              );
+            })}
 
             {pagedRequests.length === 0 && (
               <div className="text-center py-12 text-slate-500 font-medium">
@@ -1553,6 +1637,20 @@ function RequestsView({
                       <option value="Stationed Usage">Stationed Usage</option>
                       <option value="Test">Test</option>
                     </select>
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <label className="text-sm font-medium text-slate-700">
+                      Staff Notes (Optional)
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={requestFormData.notes}
+                      onChange={(e) =>
+                        setRequestFormData({ ...requestFormData, notes: e.target.value })
+                      }
+                      placeholder="Pickup time window, return condition, missing items, or internal notes..."
+                      className="w-full px-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none resize-y"
+                    />
                   </div>
                 </div>
 

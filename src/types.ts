@@ -74,6 +74,7 @@ export type Request = {
   status: RequestStatus | string;
   line_items: RequestLineItem[];
   handled_by?: string;
+  notes?: string;
   is_deleted?: boolean;
   is_recurring_instance?: boolean;
   created_at?: string;
